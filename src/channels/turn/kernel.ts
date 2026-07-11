@@ -17,6 +17,7 @@ import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protecti
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
   hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
   type ChannelTurnDispatchResultLike,
 } from "./dispatch-result.js";
 import {
@@ -328,6 +329,19 @@ function isExplicitlyNonVisibleChannelDelivery(result: unknown): boolean {
   );
 }
 
+const ZERO_COUNT_VISIBLE_DISPATCH_FALLBACK_TEXT =
+  "Reply generation failed before producing a visible answer. I logged the stall; please resend or ask for status.";
+
+function shouldDeliverZeroCountVisibleDispatchFallback<TDispatchResult>(
+  params: AssembledChannelTurn,
+  dispatchResult: TDispatchResult,
+): boolean {
+  if (params.admission?.kind === "observeOnly" || isSystemChannelTurn(params.ctxPayload)) {
+    return false;
+  }
+  return !hasVisibleChannelTurnDispatch(dispatchResult as ChannelTurnDispatchResultLike);
+}
+
 function markChannelDeliveryErrorVisible(error: unknown): unknown {
   if (typeof error === "object" && error !== null && !Array.isArray(error)) {
     try {
@@ -358,6 +372,82 @@ async function runChannelDeliveryObserver(params: {
       ? error
       : markChannelDeliveryErrorVisible(error);
   }
+}
+
+async function deliverAssembledChannelPayload(
+  params: AssembledChannelTurn,
+  payload: ReplyPayload,
+  info: Parameters<ChannelEventDeliveryAdapter["deliver"]>[1],
+): Promise<unknown> {
+  const preparedPayload = params.delivery.preparePayload
+    ? await params.delivery.preparePayload(payload, info)
+    : payload;
+  const durableOptions =
+    typeof params.delivery.durable === "function"
+      ? await params.delivery.durable(preparedPayload, info)
+      : params.delivery.durable;
+  if (durableOptions) {
+    const durable = await deliverInboundReplyWithMessageSendContext({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+      agentId: params.agentId,
+      ctxPayload: params.ctxPayload,
+      payload: preparedPayload,
+      info,
+      ...durableOptions,
+    });
+    throwIfDurableInboundReplyDeliveryFailed(durable);
+    if (isDurableInboundReplyDeliveryHandled(durable)) {
+      await runChannelDeliveryObserver({
+        onDelivered: params.delivery.onDelivered,
+        payload: preparedPayload,
+        info,
+        result: durable.delivery,
+      });
+      return durable.delivery;
+    }
+  }
+  const result = await params.delivery.deliver(preparedPayload, info);
+  await runChannelDeliveryObserver({
+    onDelivered: params.delivery.onDelivered,
+    payload: preparedPayload,
+    info,
+    result,
+  });
+  return result;
+}
+
+async function deliverZeroCountVisibleDispatchFallback<TDispatchResult>(
+  params: AssembledChannelTurn,
+  dispatchResult: TDispatchResult,
+): Promise<TDispatchResult> {
+  const counts = resolveChannelTurnDispatchCounts(
+    dispatchResult as ChannelTurnDispatchResultLike | undefined,
+  );
+  const result = await deliverAssembledChannelPayload(
+    params,
+    {
+      text: ZERO_COUNT_VISIBLE_DISPATCH_FALLBACK_TEXT,
+      isError: true,
+      isStatusNotice: true,
+      channelData: {
+        openclawFallbackReason: "zero-count-visible-dispatch",
+      },
+    },
+    { kind: "final" },
+  );
+  return {
+    ...(dispatchResult as object),
+    observedReplyDelivery: true,
+    queuedFinal: true,
+    counts: {
+      ...counts,
+      final: counts.final + 1,
+    },
+    zeroCountFallbackDelivered: true,
+    zeroCountFallbackDelivery: result,
+  } as TDispatchResult;
 }
 
 function resolveBotLoopProtectionDrop<TDispatchResult>(
@@ -430,56 +520,25 @@ export async function dispatchAssembledChannelTurn(
       log: params.log,
       messageId: params.messageId,
       runDispatch: async () =>
-        await params.dispatchReplyWithBufferedBlockDispatcher({
-          ctx: params.ctxPayload,
-          cfg: params.cfg,
-          dispatcherOptions: {
-            ...replyPipeline.dispatcherOptions,
-            deliver: async (payload: ReplyPayload, info) => {
-              const preparedPayload = params.delivery.preparePayload
-                ? await params.delivery.preparePayload(payload, info)
-                : payload;
-              const durableOptions =
-                typeof params.delivery.durable === "function"
-                  ? await params.delivery.durable(preparedPayload, info)
-                  : params.delivery.durable;
-              if (durableOptions) {
-                const durable = await deliverInboundReplyWithMessageSendContext({
-                  cfg: params.cfg,
-                  channel: params.channel,
-                  accountId: params.accountId,
-                  agentId: params.agentId,
-                  ctxPayload: params.ctxPayload,
-                  payload: preparedPayload,
-                  info,
-                  ...durableOptions,
-                });
-                throwIfDurableInboundReplyDeliveryFailed(durable);
-                if (isDurableInboundReplyDeliveryHandled(durable)) {
-                  await runChannelDeliveryObserver({
-                    onDelivered: params.delivery.onDelivered,
-                    payload: preparedPayload,
-                    info,
-                    result: durable.delivery,
-                  });
-                  return durable.delivery;
-                }
-              }
-              const result = await params.delivery.deliver(preparedPayload, info);
-              await runChannelDeliveryObserver({
-                onDelivered: params.delivery.onDelivered,
-                payload: preparedPayload,
-                info,
-                result,
-              });
-              return result;
+        await params
+          .dispatchReplyWithBufferedBlockDispatcher({
+            ctx: params.ctxPayload,
+            cfg: params.cfg,
+            dispatcherOptions: {
+              ...replyPipeline.dispatcherOptions,
+              deliver: async (payload: ReplyPayload, info) =>
+                await deliverAssembledChannelPayload(params, payload, info),
+              onError: params.delivery.onError,
             },
-            onError: params.delivery.onError,
-          },
-          toolsAllow: params.toolsAllow,
-          replyOptions: replyPipeline.replyOptions,
-          replyResolver: params.replyResolver,
-        }),
+            toolsAllow: params.toolsAllow,
+            replyOptions: replyPipeline.replyOptions,
+            replyResolver: params.replyResolver,
+          })
+          .then((dispatchResult) =>
+            shouldDeliverZeroCountVisibleDispatchFallback(params, dispatchResult)
+              ? deliverZeroCountVisibleDispatchFallback(params, dispatchResult)
+              : dispatchResult,
+          ),
     },
     { suppressObserveOnlyDispatch: false },
   );

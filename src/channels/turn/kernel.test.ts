@@ -312,6 +312,44 @@ describe("channel turn kernel", () => {
     expect(delivered.visibleReplySent).toBe(true);
   });
 
+  it("sends a visible fallback when a dispatched turn queues no reply payloads", async () => {
+    const deliver = vi.fn(async () => ({ visibleReplySent: true, messageIds: ["tg-fallback"] }));
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    })) as DispatchReplyWithBufferedBlockDispatcher;
+
+    const result = await dispatchAssembledChannelTurn({
+      cfg,
+      channel: "telegram",
+      accountId: "acct",
+      agentId: "main",
+      routeSessionKey: "agent:main:telegram:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher,
+      delivery: { deliver },
+    });
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const [payload, info] = deliver.mock.calls[0] as unknown as [ReplyPayload, unknown];
+    expect(payload.text).toContain("Reply generation failed");
+    expect(payload.isError).toBe(true);
+    expect(payload.isStatusNotice).toBe(true);
+    expect(payload.channelData).toEqual({
+      openclawFallbackReason: "zero-count-visible-dispatch",
+    });
+    expect(info).toEqual({ kind: "final" });
+    expect(result.dispatched).toBe(true);
+    expect(result.dispatchResult).toMatchObject({
+      queuedFinal: true,
+      observedReplyDelivery: true,
+      counts: { tool: 0, block: 0, final: 1 },
+      zeroCountFallbackDelivered: true,
+    });
+  });
+
   it("prepares payloads before durable enqueue and observes handled delivery", async () => {
     sendDurableMessageBatch.mockResolvedValueOnce(createDurableSendResult(["tlon-1"]));
     const onDelivered = vi.fn();
