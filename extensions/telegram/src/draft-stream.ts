@@ -93,6 +93,8 @@ export type TelegramDraftPreview = {
 type SupersededTelegramPreview = {
   messageId: number;
   textSnapshot: string;
+  sourceStartOffset: number;
+  sourceEndOffset: number;
   visibleSinceMs?: number;
   retain?: boolean;
 };
@@ -215,6 +217,14 @@ function findTelegramDraftChunkLength(
   return safeBreak > 0 ? safeBreak + 1 : safeText.length;
 }
 
+function skipSourceBoundaryWhitespace(text: string, offset: number): number {
+  let next = offset;
+  while (next < text.length && /\s/u.test(text[next] ?? "")) {
+    next += 1;
+  }
+  return next;
+}
+
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: Parameters<Bot["api"]["sendMessage"]>[0];
@@ -282,6 +292,9 @@ export function createTelegramDraftStream(params: {
   type PreviewSendParams = {
     preview: TelegramDraftPreview;
     sendGeneration: number;
+    sourceTextSnapshot: string;
+    sourceStartOffset: number;
+    sourceEndOffset: number;
   };
   const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
     if (richMessages) {
@@ -331,6 +344,9 @@ export function createTelegramDraftStream(params: {
   const sendMessageTransportPreview = async ({
     preview,
     sendGeneration,
+    sourceTextSnapshot,
+    sourceStartOffset,
+    sourceEndOffset,
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
@@ -406,7 +422,9 @@ export function createTelegramDraftStream(params: {
       }
       params.onSupersededPreview?.({
         messageId: normalizedMessageId,
-        textSnapshot: preview.text,
+        textSnapshot: sourceTextSnapshot,
+        sourceStartOffset,
+        sourceEndOffset,
         visibleSinceMs,
         retain: true,
       });
@@ -436,7 +454,10 @@ export function createTelegramDraftStream(params: {
     if (!trimmed) {
       return false;
     }
-    const currentText = trimmed.slice(deliveredTextOffset).trimStart();
+    // Keep every preview page in the original source coordinate. Rendered HTML
+    // can expand independently, so neither trimming nor rendered lengths may
+    // advance the source offset used by final delivery.
+    const currentText = trimmed.slice(deliveredTextOffset);
     if (!currentText) {
       return false;
     }
@@ -462,20 +483,27 @@ export function createTelegramDraftStream(params: {
       if (!streamState.final) {
         if (chunkLength > 0) {
           const sent = await sendOrEditStreamMessage(
-            trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),
+            trimmed.slice(0, deliveredTextOffset + chunkLength),
           );
           if (!sent) {
             return false;
           }
           const retainedMessageId = streamMessageId;
-          const retainedTextSnapshot = lastDeliveredText.slice(deliveredTextOffset);
+          const retainedSourceStartOffset = deliveredTextOffset;
+          const retainedSourceEndOffset = lastDeliveredText.length;
+          const retainedTextSnapshot = lastDeliveredText.slice(
+            retainedSourceStartOffset,
+            retainedSourceEndOffset,
+          );
           const retainedVisibleSinceMs = streamVisibleSinceMs;
-          deliveredTextOffset = lastDeliveredText.length;
+          deliveredTextOffset = skipSourceBoundaryWhitespace(trimmed, retainedSourceEndOffset);
           resetStreamToNewMessage({ keepPending: true, resetOffset: false });
           if (typeof retainedMessageId === "number") {
             params.onSupersededPreview?.({
               messageId: retainedMessageId,
               textSnapshot: retainedTextSnapshot,
+              sourceStartOffset: retainedSourceStartOffset,
+              sourceEndOffset: retainedSourceEndOffset,
               visibleSinceMs: retainedVisibleSinceMs,
               retain: true,
             });
@@ -488,14 +516,21 @@ export function createTelegramDraftStream(params: {
       }
       if (lastDeliveredText.length > deliveredTextOffset) {
         const supersededMessageId = streamMessageId;
-        const supersededTextSnapshot = lastDeliveredText.slice(deliveredTextOffset);
+        const supersededSourceStartOffset = deliveredTextOffset;
+        const supersededSourceEndOffset = lastDeliveredText.length;
+        const supersededTextSnapshot = lastDeliveredText.slice(
+          supersededSourceStartOffset,
+          supersededSourceEndOffset,
+        );
         const supersededVisibleSinceMs = streamVisibleSinceMs;
-        deliveredTextOffset = lastDeliveredText.length;
+        deliveredTextOffset = skipSourceBoundaryWhitespace(trimmed, supersededSourceEndOffset);
         resetStreamToNewMessage({ keepFinal: true, keepPending: true, resetOffset: false });
         if (typeof supersededMessageId === "number") {
           params.onSupersededPreview?.({
             messageId: supersededMessageId,
             textSnapshot: supersededTextSnapshot,
+            sourceStartOffset: supersededSourceStartOffset,
+            sourceEndOffset: supersededSourceEndOffset,
             visibleSinceMs: supersededVisibleSinceMs,
             retain: true,
           });
@@ -504,7 +539,7 @@ export function createTelegramDraftStream(params: {
       }
       if (chunkLength > 0) {
         const sent = await sendOrEditStreamMessage(
-          trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),
+          trimmed.slice(0, deliveredTextOffset + chunkLength),
         );
         if (!sent) {
           return false;
@@ -530,6 +565,9 @@ export function createTelegramDraftStream(params: {
       const sent = await sendMessageTransportPreview({
         preview: rendered,
         sendGeneration,
+        sourceTextSnapshot: currentText,
+        sourceStartOffset: deliveredTextOffset,
+        sourceEndOffset: trimmed.length,
       });
       if (sent) {
         previewRevision += 1;

@@ -36,6 +36,8 @@ export type TelegramReplyFenceTerminalizer = (
   event: TelegramReplyFenceTerminalEvent,
 ) => Promise<void> | void;
 
+const TELEGRAM_REPLY_FENCE_TERMINALIZER_TIMEOUT_MS = 1_000;
+
 // Newer accepted turns and authorized aborts can arrive ahead of older same-session reply work.
 const telegramReplyFenceByKey = new Map<string, TelegramReplyFenceState>();
 const telegramReplyFenceKeysByLane = new Map<string, Set<string>>();
@@ -185,16 +187,37 @@ export async function terminalizeTelegramReplyFenceLane(
   event: TelegramReplyFenceTerminalEvent,
 ): Promise<boolean> {
   const keys = [...(telegramReplyFenceKeysByLane.get(laneKey) ?? [])];
-  let terminalized = false;
+  const terminalizers: TelegramReplyFenceTerminalizer[] = [];
   for (const key of keys) {
     const state = telegramReplyFenceByKey.get(key);
     if (!state?.terminalizers?.size) {
       continue;
     }
-    terminalized = true;
-    await Promise.all([...state.terminalizers].map((terminalizer) => terminalizer(event)));
+    terminalizers.push(...state.terminalizers);
   }
-  return terminalized;
+  if (terminalizers.length === 0) {
+    return false;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // Terminalization is a last-chance user-visible flush. It must never hold
+    // the reply fence open and block timeout recovery if Telegram is wedged.
+    await Promise.race([
+      Promise.allSettled(
+        terminalizers.map((terminalizer) => Promise.resolve().then(() => terminalizer(event))),
+      ),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, TELEGRAM_REPLY_FENCE_TERMINALIZER_TIMEOUT_MS);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+  return true;
 }
 
 export function isTelegramReplyFenceSuperseded(params: {
@@ -273,3 +296,7 @@ export function resetTelegramReplyFenceForTests(): void {
   telegramReplyFenceByKey.clear();
   telegramReplyFenceKeysByLane.clear();
 }
+
+export const testing = {
+  terminalizerTimeoutMs: TELEGRAM_REPLY_FENCE_TERMINALIZER_TIMEOUT_MS,
+};

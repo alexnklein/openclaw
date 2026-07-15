@@ -856,6 +856,22 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
+  it("continues explicitly when a short visible preview diverges from the final", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue("visible preview");
+    const harness = createHarness({ answerStream: answer });
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.lanes.answer.liveOutput.markCommittedText({ text: "visible preview" });
+
+    const result = await deliverFinalAnswer(harness, "different model answer");
+
+    expectPreviewFinalized(result);
+    expect(answer.update).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith({
+      text: "Continued response:\n\ndifferent model answer",
+    });
+  });
+
   it("sends only the missing suffix when a long final extends the streamed prefix", async () => {
     const answer = createTestDraftStream({ messageId: 999 });
     answer.lastDeliveredText.mockReturnValue("Hello world");

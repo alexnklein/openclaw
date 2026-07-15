@@ -603,6 +603,8 @@ describe("createTelegramDraftStream", () => {
     expect(supersededPreview).toEqual({
       messageId: 17,
       textSnapshot: "Message A partial",
+      sourceStartOffset: 0,
+      sourceEndOffset: "Message A partial".length,
       visibleSinceMs: supersededPreview.visibleSinceMs,
       retain: true,
     });
@@ -1154,6 +1156,8 @@ describe("createTelegramDraftStream", () => {
     expect(supersededPreview).toEqual({
       messageId: 17,
       textSnapshot: "Hello world",
+      sourceStartOffset: 0,
+      sourceEndOffset: "Hello world".length,
       visibleSinceMs: supersededPreview.visibleSinceMs,
       retain: true,
     });

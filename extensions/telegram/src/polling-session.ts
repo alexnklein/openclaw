@@ -752,10 +752,20 @@ export class TelegramPollingSession {
       accountId: this.opts.accountId,
       sequentialKey: state.laneKey,
     });
-    await terminalizeTelegramReplyFenceLane(scopedReplyFenceLaneKey, {
-      reason: "handler-timeout",
-    });
-    const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+    let abortedReplyWork = false;
+    try {
+      await terminalizeTelegramReplyFenceLane(scopedReplyFenceLaneKey, {
+        reason: "handler-timeout",
+      });
+    } catch (err) {
+      this.opts.log(
+        `[telegram][diag] timed out buffered spooled update ${state.updateId} could not terminalize active reply work: ${formatErrorMessage(err)}`,
+      );
+    } finally {
+      // Terminal delivery is best-effort; timeout recovery must always abort
+      // the active run so the retained spool claim can finish failing closed.
+      abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+    }
     if (!abortedReplyWork) {
       this.opts.log(
         `[telegram][diag] timed out buffered spooled update ${state.updateId} had no active reply fence on lane ${state.laneKey}.`,
@@ -1062,10 +1072,20 @@ export class TelegramPollingSession {
       accountId: this.opts.accountId,
       sequentialKey: handler.laneKey,
     });
-    await terminalizeTelegramReplyFenceLane(scopedReplyFenceLaneKey, {
-      reason: "handler-timeout",
-    });
-    const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+    let abortedReplyWork = false;
+    try {
+      await terminalizeTelegramReplyFenceLane(scopedReplyFenceLaneKey, {
+        reason: "handler-timeout",
+      });
+    } catch (err) {
+      this.opts.log(
+        `[telegram][diag] timed out spooled update ${handler.updateId} could not terminalize active reply work: ${formatErrorMessage(err)}`,
+      );
+    } finally {
+      // Restart safety outranks the best-effort terminal edit: always release
+      // reply work before waiting for handler settlement and cycling ingress.
+      abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+    }
     if (!abortedReplyWork) {
       this.opts.log(
         `[telegram][diag] timed out spooled update ${handler.updateId} had no active reply fence on lane ${handler.laneKey}; keeping the lane guarded until the handler stops.`,

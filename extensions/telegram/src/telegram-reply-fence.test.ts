@@ -9,6 +9,7 @@ import {
   supersedeTelegramReplyFence,
   supersedeTelegramReplyFenceLane,
   terminalizeTelegramReplyFenceLane,
+  testing,
 } from "./telegram-reply-fence.js";
 
 describe("shouldSupersedeTelegramReplyFence", () => {
@@ -162,5 +163,62 @@ describe("telegram reply fence supersede", () => {
     await terminalizeTelegramReplyFenceLane(laneKey, { reason: "handler-timeout" });
     expect(terminalizer).toHaveBeenCalledWith({ reason: "handler-timeout" });
     resetTelegramReplyFenceForTests();
+  });
+
+  it("keeps terminalizer rejection best-effort so the lane can still be superseded", async () => {
+    resetTelegramReplyFenceForTests();
+    const terminalizer = vi.fn(async () => {
+      throw new Error("telegram edit failed");
+    });
+    const controller = new AbortController();
+    const laneKey = buildTelegramReplyFenceLaneKey({
+      accountId: "default",
+      sequentialKey: "telegram:rejecting",
+    });
+    beginTelegramReplyFence({
+      key: "agent:main:telegram:direct:rejecting",
+      supersede: true,
+      abortController: controller,
+      laneKey,
+      terminalizer,
+    });
+
+    await expect(
+      terminalizeTelegramReplyFenceLane(laneKey, { reason: "handler-timeout" }),
+    ).resolves.toBe(true);
+    expect(supersedeTelegramReplyFenceLane(laneKey)).toBe(true);
+    expect(controller.signal.aborted).toBe(true);
+    resetTelegramReplyFenceForTests();
+  });
+
+  it("bounds a never-settling terminalizer so the lane can still be superseded", async () => {
+    vi.useFakeTimers();
+    resetTelegramReplyFenceForTests();
+    const terminalizer = vi.fn(() => new Promise<void>(() => undefined));
+    const controller = new AbortController();
+    const laneKey = buildTelegramReplyFenceLaneKey({
+      accountId: "default",
+      sequentialKey: "telegram:hung",
+    });
+    beginTelegramReplyFence({
+      key: "agent:main:telegram:direct:hung",
+      supersede: true,
+      abortController: controller,
+      laneKey,
+      terminalizer,
+    });
+
+    try {
+      const terminalization = terminalizeTelegramReplyFenceLane(laneKey, {
+        reason: "handler-timeout",
+      });
+      await vi.advanceTimersByTimeAsync(testing.terminalizerTimeoutMs);
+      await expect(terminalization).resolves.toBe(true);
+      expect(supersedeTelegramReplyFenceLane(laneKey)).toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+    } finally {
+      resetTelegramReplyFenceForTests();
+      vi.useRealTimers();
+    }
   });
 });

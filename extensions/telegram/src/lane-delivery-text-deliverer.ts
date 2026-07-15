@@ -133,8 +133,9 @@ function isDeliveredPrefix(params: { deliveredText: string | undefined; finalTex
   );
 }
 
-function isSignificantCommittedPreview(text: string | undefined, _draftMaxChars: number): boolean {
-  return text !== undefined && text.trim().length >= 1000;
+function hasCommittedPreview(liveOutput: LiveOutputContinuity, text: string | undefined): boolean {
+  const committedText = liveOutput.snapshot().committedText;
+  return text !== undefined && committedText.trim().length > 0 && text.startsWith(committedText);
 }
 
 export function createTelegramLaneLiveOutput(params: {
@@ -349,7 +350,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const finalResolution =
       useFinalTextRecovery &&
       deliveredStreamTextBeforeUpdate !== undefined &&
-      isSignificantCommittedPreview(deliveredStreamTextBeforeUpdate, params.draftMaxChars)
+      hasCommittedPreview(lane.liveOutput, deliveredStreamTextBeforeUpdate)
         ? resolveLiveOutputFinalText({
             committedText: deliveredStreamTextBeforeUpdate,
             finalText,

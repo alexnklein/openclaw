@@ -456,7 +456,11 @@ async function waitForAbortSignal(signal: AbortSignal): Promise<void> {
   });
 }
 
-async function waitForTestReplyFenceAbort(params: { key: string; laneKey: string }): Promise<void> {
+async function waitForTestReplyFenceAbort(params: {
+  key: string;
+  laneKey: string;
+  terminalizer?: () => Promise<void> | void;
+}): Promise<void> {
   const controller = new AbortController();
   beginTelegramReplyFence({
     key: params.key,
@@ -466,6 +470,7 @@ async function waitForTestReplyFenceAbort(params: { key: string; laneKey: string
     }),
     supersede: false,
     abortController: controller,
+    ...(params.terminalizer ? { terminalizer: params.terminalizer } : {}),
   });
   try {
     await waitForAbortSignal(controller.signal);
@@ -2047,6 +2052,11 @@ describe("TelegramPollingSession", () => {
       const abort = new AbortController();
       const log = vi.fn();
       const participants: TelegramSpooledReplayDeferredParticipant[] = [];
+      const replyAbort = new AbortController();
+      const terminalizer = vi.fn(async () => {
+        throw new Error("terminal edit failed");
+      });
+      const replyFenceKey = "test-buffered-timeout:topic-10";
       await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "buffered timeout")]);
 
       const { runPromise, stopWorker } = startIsolatedIngressSession({
@@ -2056,6 +2066,16 @@ describe("TelegramPollingSession", () => {
         drainIntervalMs: 10,
         spooledUpdateHandlerTimeoutMs: 20,
         handleUpdate: async (update) => {
+          beginTelegramReplyFence({
+            key: replyFenceKey,
+            laneKey: buildTelegramReplyFenceLaneKey({
+              accountId: "default",
+              sequentialKey: "telegram:-100:topic:10",
+            }),
+            supersede: false,
+            abortController: replyAbort,
+            terminalizer,
+          });
           const participant = createTelegramSpooledReplayDeferredParticipant(
             `test-buffer:${update.update_id}`,
           );
@@ -2072,9 +2092,12 @@ describe("TelegramPollingSession", () => {
       expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
       expectLogIncludes(log, "buffered processing timed out behind update 42");
       expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      expect(terminalizer).toHaveBeenCalledWith({ reason: "handler-timeout" });
+      expect(replyAbort.signal.aborted).toBe(true);
       abort.abort();
       stopWorker();
       await runPromise;
+      endTelegramReplyFence(replyFenceKey, replyAbort);
     });
   });
 
@@ -3600,6 +3623,7 @@ describe("TelegramPollingSession", () => {
     const ignoredSetStatus = vi.fn();
     void ignoredSetStatus;
     const events: string[] = [];
+    const terminalizer = vi.fn(() => new Promise<void>(() => undefined));
     const firstBot = {
       api: {
         deleteWebhook: vi.fn(async () => true),
@@ -3611,6 +3635,7 @@ describe("TelegramPollingSession", () => {
         await waitForTestReplyFenceAbort({
           key: "test-session:topic-10",
           laneKey: "telegram:-100:topic:10",
+          terminalizer,
         });
       }),
       stop: vi.fn(async () => undefined),
@@ -3651,7 +3676,7 @@ describe("TelegramPollingSession", () => {
       const runPromise = session.runUntilAbort();
       await vi.waitFor(() => expect(events).toEqual(["first:42"]));
 
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(2_000);
       await vi.waitFor(() => expect(worker.createWorker).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => expect(events).toEqual(["first:42", "second:43"]));
       await runPromise;
@@ -3662,6 +3687,7 @@ describe("TelegramPollingSession", () => {
       expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
       expect(await failedUpdateIds(tempDir)).toEqual([42]);
       expectLogIncludes(log, "spool handler timed out behind update 42");
+      expect(terminalizer).toHaveBeenCalledWith({ reason: "handler-timeout" });
     } finally {
       abort.abort();
       worker.stop();
