@@ -1392,6 +1392,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     streamParams.onSupersededPreview?.({
       messageId: 17,
       textSnapshot: "first page",
+      sourceStartOffset: 0,
+      sourceEndOffset: "first page".length,
       retain: true,
     });
     expect(bot.api["deleteMessage"]).not.toHaveBeenCalled();
@@ -1399,6 +1401,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     streamParams.onSupersededPreview?.({
       messageId: 18,
       textSnapshot: "stale page",
+      sourceStartOffset: 0,
+      sourceEndOffset: "stale page".length,
     });
     await vi.waitFor(() => expect(bot.api["deleteMessage"]).toHaveBeenCalledWith(123, 18));
   });
