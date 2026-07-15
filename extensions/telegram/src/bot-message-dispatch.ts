@@ -150,6 +150,7 @@ import {
   resolveTelegramReplyFenceKey,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
+  type TelegramReplyFenceTerminalEvent,
 } from "./telegram-reply-fence.js";
 import { clipTelegramProgressText } from "./truncate.js";
 
@@ -1111,6 +1112,11 @@ export const dispatchTelegramMessage = async ({
   });
   let finalAnswerDeliveryStarted = false;
   let finalAnswerDelivered = false;
+  let timeoutTerminalized = false;
+  let terminalizeTimedOutDispatch: (
+    event: TelegramReplyFenceTerminalEvent,
+  ) => Promise<void> = async () => undefined;
+  let dispatchReportedFinal = false;
   // While the durable verbose lane is active it owns EVERY progress surface
   // (commentary, tool, plan, command output, patch summaries), posting each as
   // its own persistent message. The ephemeral window must therefore render none
@@ -1474,6 +1480,7 @@ export const dispatchTelegramMessage = async ({
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
+  const deliveryState = createLaneDeliveryStateTracker();
   const supersedeReplyFence = shouldSupersedeTelegramReplyFence(ctxPayload);
   activeReplyFenceKey = supersedeReplyFence
     ? replyFenceKey.activeKey
@@ -1489,6 +1496,7 @@ export const dispatchTelegramMessage = async ({
     supersede: supersedeReplyFence,
     abortController: replyAbortController,
     laneKey: scopedReplyFenceLaneKey,
+    terminalizer: (event) => terminalizeTimedOutDispatch(event),
   });
 
   const implicitQuoteReplyTargetId =
@@ -1504,7 +1512,6 @@ export const dispatchTelegramMessage = async ({
   const replyQuoteEntities = Array.isArray(ctxPayload.ReplyToQuoteEntities)
     ? ctxPayload.ReplyToQuoteEntities
     : undefined;
-  const deliveryState = createLaneDeliveryStateTracker();
   const beginDeliveryCorrelation = () =>
     beginTelegramInboundEventDeliveryCorrelation(
       ctxPayload.SessionKey,
@@ -1787,6 +1794,40 @@ export const dispatchTelegramMessage = async ({
         deliveryState.markDelivered();
       }
       return result.delivered;
+    };
+    terminalizeTimedOutDispatch = async (event) => {
+      if (event.reason !== "handler-timeout" || timeoutTerminalized || isDispatchSuperseded()) {
+        return;
+      }
+      timeoutTerminalized = true;
+      for (const lane of [answerLane, reasoningLane]) {
+        const stream = lane.stream;
+        if (!stream || lane.finalized) {
+          continue;
+        }
+        const hasVisiblePreview =
+          lane.hasStreamedMessage ||
+          lane.lastPartialText.trim().length > 0 ||
+          typeof stream.messageId() === "number";
+        if (!hasVisiblePreview) {
+          continue;
+        }
+        await stream.stop();
+        if (typeof stream.messageId() === "number" || stream.sendMayHaveLanded?.()) {
+          lane.finalized = true;
+          deliveryState.markDelivered();
+        }
+      }
+      const delivered = await sendPayload(
+        {
+          text: "Response interrupted while processing. Ask me to continue from the visible preview.",
+          isError: true,
+        },
+        { durable: true, mirrorTranscript: false, silent: false },
+      );
+      if (delivered) {
+        finalAnswerDelivered = true;
+      }
     };
     const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
@@ -2864,7 +2905,9 @@ export const dispatchTelegramMessage = async ({
       // Out-of-band finals (message_tool_only) never run the in-band final-delivery
       // path, so record the final from the dispatch counts for the cleanup-time
       // collapse-bar fallback.
-      if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
+      const finalCount = turnResult.dispatchResult.counts?.final ?? 0;
+      dispatchReportedFinal = finalCount > 0;
+      if (finalCount > 0) {
         sawProgressFinal = true;
       }
       suppressSilentReplyFallback =
@@ -2950,7 +2993,10 @@ export const dispatchTelegramMessage = async ({
     !isRoomEvent &&
     !suppressFailureFallback &&
     !finalAnswerDelivered &&
-    (dispatchError || deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
+    (dispatchError ||
+      deliverySummary.skippedNonSilent > 0 ||
+      deliverySummary.failedNonSilent > 0 ||
+      (dispatchReportedFinal && !deliverySummary.delivered && !suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
@@ -3003,7 +3049,7 @@ export const dispatchTelegramMessage = async ({
   const hasFinalResponse =
     finalAnswerDelivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
   const hasVisibleResponse =
-    deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
+    deliverySummary.delivered || sentFallback || suppressSilentReplyFallback;
   const deliveryFailureWithoutFinalResponse =
     !finalAnswerDelivered &&
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);

@@ -18,12 +18,23 @@ type TelegramReplyFenceState = {
   activeDispatches: number;
   abortControllers?: Set<AbortController>;
   laneKeys?: Set<string>;
+  terminalizers?: Set<TelegramReplyFenceTerminalizer>;
 };
 
 export type TelegramReplyFenceKey = {
   activeKey: string;
   roomEventKey: string;
 };
+
+export type TelegramReplyFenceTerminalReason = "handler-timeout";
+
+export type TelegramReplyFenceTerminalEvent = {
+  reason: TelegramReplyFenceTerminalReason;
+};
+
+export type TelegramReplyFenceTerminalizer = (
+  event: TelegramReplyFenceTerminalEvent,
+) => Promise<void> | void;
 
 // Newer accepted turns and authorized aborts can arrive ahead of older same-session reply work.
 const telegramReplyFenceByKey = new Map<string, TelegramReplyFenceState>();
@@ -102,6 +113,7 @@ export function beginTelegramReplyFence(params: {
   supersede: boolean;
   abortController?: AbortController;
   laneKey?: string;
+  terminalizer?: TelegramReplyFenceTerminalizer;
 }): number {
   const existing = telegramReplyFenceByKey.get(params.key);
   const state: TelegramReplyFenceState = existing ?? {
@@ -122,6 +134,9 @@ export function beginTelegramReplyFence(params: {
     const keys = telegramReplyFenceKeysByLane.get(laneKey) ?? new Set<string>();
     keys.add(params.key);
     telegramReplyFenceKeysByLane.set(laneKey, keys);
+  }
+  if (params.terminalizer) {
+    (state.terminalizers ??= new Set()).add(params.terminalizer);
   }
   state.activeDispatches += 1;
   telegramReplyFenceByKey.set(params.key, state);
@@ -165,6 +180,23 @@ export function supersedeTelegramReplyFenceLane(laneKey: string): boolean {
   return superseded;
 }
 
+export async function terminalizeTelegramReplyFenceLane(
+  laneKey: string,
+  event: TelegramReplyFenceTerminalEvent,
+): Promise<boolean> {
+  const keys = [...(telegramReplyFenceKeysByLane.get(laneKey) ?? [])];
+  let terminalized = false;
+  for (const key of keys) {
+    const state = telegramReplyFenceByKey.get(key);
+    if (!state?.terminalizers?.size) {
+      continue;
+    }
+    terminalized = true;
+    await Promise.all([...state.terminalizers].map((terminalizer) => terminalizer(event)));
+  }
+  return terminalized;
+}
+
 export function isTelegramReplyFenceSuperseded(params: {
   key: string;
   generation: number;
@@ -181,6 +213,9 @@ export function endTelegramReplyFence(key: string, abortController?: AbortContro
     state.abortControllers?.delete(abortController);
   }
   state.activeDispatches = Math.max(0, state.activeDispatches - 1);
+  if (state.activeDispatches <= 0) {
+    state.terminalizers?.clear();
+  }
   maybeDeleteTelegramReplyFenceState(key, state);
 }
 

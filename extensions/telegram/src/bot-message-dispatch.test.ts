@@ -5761,6 +5761,91 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("A".repeat(4000));
   });
 
+  it("keeps committed preview text when a fallback final shares its prefix", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "stable prefix" });
+        await dispatcherOptions.deliver({ text: "stable prefix plus final" }, { kind: "final" });
+        return { queuedFinal: true, counts: { block: 0, final: 1, tool: 0 } };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("stable prefix");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("stable prefix plus final");
+    expect(deliverReplies).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: expect.arrayContaining([
+          expect.objectContaining({ text: "stable prefix plus final" }),
+        ]),
+      }),
+    );
+  });
+
+  it("starts an explicit continuation when a fallback final diverges from visible preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const committedPreview = "original partial ".repeat(90);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: committedPreview });
+        await dispatcherOptions.deliver({ text: "different final" }, { kind: "final" });
+        return { queuedFinal: true, counts: { block: 0, final: 1, tool: 0 } };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(committedPreview);
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith("different final");
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expectDeliveredReply(0, { text: "Continued response:\n\ndifferent final" });
+  });
+
+  it("terminalizes a timed-out spooled preview before reply-fence supersession", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const context = createContext({
+      ctxPayload: createDirectSessionPayload(),
+    });
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "partial before timeout" });
+      await dispatchGate;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+
+    const run = dispatchWithContext({ context, streamMode: "partial" });
+    await vi.waitFor(() => expect(answerDraftStream.update).toHaveBeenCalled());
+
+    const {
+      buildTelegramReplyFenceLaneKey,
+      supersedeTelegramReplyFenceLane,
+      terminalizeTelegramReplyFenceLane,
+    } = await import("./telegram-reply-fence.js");
+    const { getTelegramSequentialKey } = await import("./sequential-key.js");
+    const laneKey = buildTelegramReplyFenceLaneKey({
+      accountId: "default",
+      sequentialKey: getTelegramSequentialKey({
+        message: context.msg,
+        ...(context.primaryCtx.me ? { me: context.primaryCtx.me } : {}),
+      }),
+    });
+
+    await terminalizeTelegramReplyFenceLane(laneKey, { reason: "handler-timeout" });
+    supersedeTelegramReplyFenceLane(laneKey);
+    releaseDispatch?.();
+    await run;
+
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expectDeliveredReply(0, {
+      text: "Response interrupted while processing. Ask me to continue from the visible preview.",
+    });
+  });
+
   it("does not suppress text-only blocks as delivered when answer draft is inactive", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -6307,7 +6392,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(bot.api["editForumTopic"]).not.toHaveBeenCalled();
   });
 
-  it("does not emit a silent-reply fallback when the dispatcher reports a queued final reply", async () => {
+  it("emits an empty-response fallback when a prepared final queues no visible payload", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: true,
       counts: { block: 0, final: 1, tool: 0 },
@@ -6320,7 +6405,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "off",
     });
 
-    expect(deliverReplies).not.toHaveBeenCalled();
+    expectDeliveredReply(0, { text: "No response generated. Please try again." });
   });
 
   it("does not emit a silent-reply fallback for no-response DM turns", async () => {

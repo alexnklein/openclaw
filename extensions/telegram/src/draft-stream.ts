@@ -210,7 +210,9 @@ function findTelegramDraftChunkLength(
       high = mid - 1;
     }
   }
-  return sliceUtf16Safe(text, 0, best).length;
+  const safeText = sliceUtf16Safe(text, 0, best);
+  const safeBreak = Math.max(safeText.lastIndexOf("\n"), safeText.lastIndexOf(" "));
+  return safeBreak > 0 ? safeBreak + 1 : safeText.length;
 }
 
 export function createTelegramDraftStream(params: {
@@ -459,9 +461,28 @@ export function createTelegramDraftStream(params: {
       );
       if (!streamState.final) {
         if (chunkLength > 0) {
-          return await sendOrEditStreamMessage(
+          const sent = await sendOrEditStreamMessage(
             trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),
           );
+          if (!sent) {
+            return false;
+          }
+          const retainedMessageId = streamMessageId;
+          const retainedTextSnapshot = lastDeliveredText.slice(deliveredTextOffset);
+          const retainedVisibleSinceMs = streamVisibleSinceMs;
+          deliveredTextOffset = lastDeliveredText.length;
+          resetStreamToNewMessage({ keepPending: true, resetOffset: false });
+          if (typeof retainedMessageId === "number") {
+            params.onSupersededPreview?.({
+              messageId: retainedMessageId,
+              textSnapshot: retainedTextSnapshot,
+              visibleSinceMs: retainedVisibleSinceMs,
+              retain: true,
+            });
+          }
+          return trimmed.length > deliveredTextOffset
+            ? await sendOrEditStreamMessage(trimmed)
+            : true;
         }
         return stopOversizedPreview(renderedPayloadLength);
       }

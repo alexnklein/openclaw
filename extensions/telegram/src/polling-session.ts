@@ -59,6 +59,7 @@ import {
 import {
   buildTelegramReplyFenceLaneKey,
   supersedeTelegramReplyFenceLane,
+  terminalizeTelegramReplyFenceLane,
 } from "./telegram-reply-fence.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
@@ -751,6 +752,9 @@ export class TelegramPollingSession {
       accountId: this.opts.accountId,
       sequentialKey: state.laneKey,
     });
+    await terminalizeTelegramReplyFenceLane(scopedReplyFenceLaneKey, {
+      reason: "handler-timeout",
+    });
     const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
     if (!abortedReplyWork) {
       this.opts.log(
@@ -1057,6 +1061,9 @@ export class TelegramPollingSession {
     const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
       accountId: this.opts.accountId,
       sequentialKey: handler.laneKey,
+    });
+    await terminalizeTelegramReplyFenceLane(scopedReplyFenceLaneKey, {
+      reason: "handler-timeout",
     });
     const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
     if (!abortedReplyWork) {

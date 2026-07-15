@@ -128,6 +128,14 @@ function isDeliveredPrefix(params: { deliveredText: string | undefined; finalTex
   );
 }
 
+function buildExplicitContinuationText(text: string): string {
+  return `Continued response:\n\n${text.trimStart()}`;
+}
+
+function isSignificantCommittedPreview(text: string, draftMaxChars: number): boolean {
+  return text.trim().length >= Math.min(1000, Math.max(1, Math.floor(draftMaxChars / 2)));
+}
+
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const followUpPayload = (payload: ReplyPayload, text: string) =>
     params.applyTextToFollowUpPayload
@@ -324,6 +332,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         finalText,
       }) &&
       deliveredStreamTextBeforeUpdate.length > activeChunk.trimEnd().length;
+    const divergentDeliveredTextBeforeUpdate =
+      useFinalTextRecovery &&
+      deliveredStreamTextBeforeUpdate !== undefined &&
+      isSignificantCommittedPreview(deliveredStreamTextBeforeUpdate, params.draftMaxChars) &&
+      !isDeliveredPrefix({
+        deliveredText: deliveredStreamTextBeforeUpdate,
+        finalText,
+      });
 
     const finalizeDeliveredPrefix = async (
       deliveredStreamText: string,
@@ -362,6 +378,32 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         buttonsAttached,
       });
     };
+
+    if (divergentDeliveredTextBeforeUpdate) {
+      await params.stopDraftLane(lane);
+      const messageId = stream.messageId();
+      if (typeof messageId !== "number") {
+        if (stream.sendMayHaveLanded?.()) {
+          lane.finalized = true;
+          params.markDelivered();
+          await params.sendPayload(
+            followUpPayload(payload, buildExplicitContinuationText(activeFullText)),
+          );
+          return result("preview-retained");
+        }
+        return undefined;
+      }
+      lane.finalized = true;
+      params.markDelivered();
+      await params.sendPayload(
+        followUpPayload(payload, buildExplicitContinuationText(activeFullText)),
+      );
+      return result("preview-finalized", {
+        content: text,
+        promptContextContent: deliveredStreamTextBeforeUpdate,
+        messageId,
+      });
+    }
 
     const candidateTexts = [stream.lastDeliveredText?.(), lane.lastPartialText];
     if (

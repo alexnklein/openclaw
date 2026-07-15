@@ -979,8 +979,11 @@ describe("createTelegramDraftStream", () => {
     expect(richMessage?.html).not.toContain("paragraph 500");
   });
 
-  it("clamps rendered previews to the text-message limit", async () => {
+  it("rolls rendered previews over at the text-message limit", async () => {
     const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
     const text = `# Long\n\n${"rich line\n".repeat(600)}`;
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
@@ -991,14 +994,18 @@ describe("createTelegramDraftStream", () => {
     stream.update(text);
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
     const sentText = requireSendMessageCallText(api, 0);
     expect(sentText.length).toBeLessThanOrEqual(4000);
     expect(sentText.startsWith("# Long\n\nrich line")).toBe(true);
+    expect(requireSendMessageCallText(api, 1).trimStart().startsWith("rich line")).toBe(true);
   });
 
-  it("keeps non-final overflow in one editable preview", async () => {
+  it("retains completed non-final overflow pages and continues in a new preview", async () => {
     const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
     const onSupersededPreview = vi.fn();
     const stream = createDraftStream(api, { maxChars: 20, onSupersededPreview });
 
@@ -1007,15 +1014,25 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello world foo bar baz qux");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expectNthPreviewSend(api, 1, "Hello world");
     expectPreviewEdit(api, "Hello world foo bar");
-    expect(onSupersededPreview).not.toHaveBeenCalled();
-    expect(stream.lastDeliveredText?.()).toBe("Hello world foo bar");
+    expectNthPreviewSend(api, 2, "baz qux");
+    expect(onSupersededPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 17,
+        textSnapshot: "Hello world foo bar",
+        retain: true,
+      }),
+    );
+    expect(stream.lastDeliveredText?.()).toBe("Hello world foo bar baz qux");
   });
 
-  it("does not retain non-final overflow preview pages", async () => {
+  it("retains non-final overflow preview pages", async () => {
     const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
     const onSupersededPreview = vi.fn();
     const stream = createDraftStream(api, {
       maxChars: 20,
@@ -1027,9 +1044,14 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello world foo bar baz qux");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expectPreviewEdit(api, "Hello world foo bar");
-    expect(onSupersededPreview).not.toHaveBeenCalled();
+    expect(onSupersededPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 17,
+        retain: true,
+      }),
+    );
   });
 
   it("continues in a new message when a final rendered preview crosses maxChars", async () => {
@@ -1051,14 +1073,18 @@ describe("createTelegramDraftStream", () => {
 
   it("clamps a first oversized non-final preview on a UTF-16 boundary", async () => {
     const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
     const stream = createDraftStream(api, { maxChars: 10 });
 
     stream.update("123456789😀tail");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
     expectNthPreviewSend(api, 1, "123456789");
-    expect(stream.lastDeliveredText?.()).toBe("123456789");
+    expectNthPreviewSend(api, 2, "😀tail");
+    expect(stream.lastDeliveredText?.()).toBe("123456789😀tail");
   });
 
   it("finalizes overflow that was hidden by a clamped non-final preview", async () => {
