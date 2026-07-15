@@ -47,6 +47,10 @@
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+"plugin: semantic-action-continuity":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/semantic-action-continuity/**"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:

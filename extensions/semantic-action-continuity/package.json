@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/semantic-action-continuity",
+  "version": "2026.6.11",
+  "private": true,
+  "description": "OpenClaw semantic action continuity plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.6.11"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

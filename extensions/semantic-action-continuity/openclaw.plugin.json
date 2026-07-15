@@ -1,0 +1,93 @@
+{
+  "id": "semantic-action-continuity",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Semantic Action Continuity",
+  "description": "Refreshes mutable workflow action snapshots before prompts and final replies.",
+  "contracts": {
+    "hooks": ["before_prompt_build", "before_agent_finalize"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "adapter": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "command": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string",
+                "minLength": 1
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 30000,
+            "default": 5000
+          }
+        }
+      },
+      "workflows": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id"],
+          "anyOf": [{ "required": ["sessionPattern"] }, { "required": ["actionPattern"] }],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+            },
+            "sessionPattern": {
+              "type": "string",
+              "minLength": 1
+            },
+            "actionPattern": {
+              "type": "string",
+              "minLength": 1
+            },
+            "responseActionPattern": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "default": []
+      },
+      "maxLedgerEntries": {
+        "type": "integer",
+        "minimum": 10,
+        "maximum": 5000,
+        "default": 500
+      },
+      "revisionInstruction": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}
