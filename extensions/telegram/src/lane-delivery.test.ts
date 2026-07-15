@@ -133,6 +133,33 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.lanes.answer.finalized).toBe(true);
   });
 
+  it("uses a fresh live output for a new logical answer after terminalization", () => {
+    const first = createTelegramLaneLiveOutput({
+      accountId: "test",
+      laneName: "answer",
+      turnId: "turn:output:0",
+    });
+    first.markCommittedText({ text: "first visible" });
+    expect(first.markFinal()).toEqual({
+      kind: "final",
+      committedText: "first visible",
+    });
+
+    const second = createTelegramLaneLiveOutput({
+      accountId: "test",
+      laneName: "answer",
+      turnId: "turn:output:1",
+    });
+    second.markCommittedText({ text: "second visible" });
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.snapshot()).toMatchObject({
+      id: "telegram:test:turn:output:1:answer",
+      committedText: "second visible",
+      terminal: { kind: "open" },
+    });
+  });
+
   it("streams block and final text through the same lane", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

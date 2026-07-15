@@ -989,8 +989,20 @@ export const dispatchTelegramMessage = async ({
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
-  const logicalTurnId = `${chatId}:${ctxPayload.MessageSid ?? msg.message_id ?? dispatchStartedAt}`;
+  const stableInboundTurnId =
+    ctxPayload.MessageSid ?? ctxPayload.MessageSidFull ?? msg.message_id ?? dispatchStartedAt;
+  const logicalTurnId = `${chatId}:${stableInboundTurnId}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const liveOutputSequences: Record<LaneName, number> = {
+    answer: 0,
+    reasoning: 0,
+  };
+  const createLaneLiveOutput = (laneName: LaneName) =>
+    createTelegramLaneLiveOutput({
+      accountId: route.accountId,
+      laneName,
+      turnId: `${logicalTurnId}:output:${liveOutputSequences[laneName]}`,
+    });
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
@@ -1025,11 +1037,7 @@ export const dispatchTelegramMessage = async ({
       : undefined;
     return {
       stream,
-      liveOutput: createTelegramLaneLiveOutput({
-        accountId: route.accountId,
-        laneName,
-        turnId: logicalTurnId,
-      }),
+      liveOutput: createLaneLiveOutput(laneName),
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,
@@ -1067,7 +1075,7 @@ export const dispatchTelegramMessage = async ({
   async function prepareAnswerLaneForToolProgress() {
     if (answerLane.finalized) {
       answerLane.stream?.forceNewMessage();
-      resetDraftLaneState(answerLane);
+      resetDraftLaneState(answerLane, { nextLogicalOutput: true });
     }
     if (activeAnswerDraftIsToolProgressOnly) {
       return;
@@ -1238,7 +1246,9 @@ export const dispatchTelegramMessage = async ({
         Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
     };
   };
-  const resetDraftLaneState = (lane: DraftLaneState) => {
+  const resolveLaneName = (lane: DraftLaneState): LaneName =>
+    lane === answerLane ? "answer" : "reasoning";
+  const resetDraftLaneState = (lane: DraftLaneState, options?: { nextLogicalOutput?: boolean }) => {
     lane.lastPartialText = "";
     if (lane === answerLane) {
       lastAnswerPartialText = "";
@@ -1253,15 +1263,20 @@ export const dispatchTelegramMessage = async ({
       lastAnswerBlockText = undefined;
       lastAnswerBlockButtons = undefined;
     }
+    if (options?.nextLogicalOutput) {
+      const laneName = resolveLaneName(lane);
+      liveOutputSequences[laneName] += 1;
+      lane.liveOutput = createLaneLiveOutput(laneName);
+    }
   };
   const rotateLaneForNewMessage = async (lane: DraftLaneState) => {
     if (!lane.hasStreamedMessage && typeof lane.stream?.messageId() !== "number") {
-      resetDraftLaneState(lane);
+      resetDraftLaneState(lane, { nextLogicalOutput: true });
       return;
     }
     await lane.stream?.stop();
     lane.stream?.forceNewMessage();
-    resetDraftLaneState(lane);
+    resetDraftLaneState(lane, { nextLogicalOutput: true });
   };
   const rotateAnswerLaneForNewMessage = async () => {
     if (materializeAnswerLaneBeforeRotation) {
@@ -1282,7 +1297,7 @@ export const dispatchTelegramMessage = async ({
     } else {
       answerLane.stream?.forceNewMessage();
     }
-    resetDraftLaneState(answerLane);
+    resetDraftLaneState(answerLane, { nextLogicalOutput: true });
     suppressProgressDraftState();
     rotateAnswerLaneWhenQueuedBlocksSettle = false;
     return true;
@@ -1318,7 +1333,7 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
     answerLane.stream?.forceNewMessage();
-    resetDraftLaneState(answerLane);
+    resetDraftLaneState(answerLane, { nextLogicalOutput: true });
     rotateAnswerLaneWhenQueuedBlocksSettle = false;
     return true;
   };
@@ -2089,7 +2104,7 @@ export const dispatchTelegramMessage = async ({
         rotateAnswerLaneWhenQueuedBlocksSettle = false;
       }
       answerLane.stream?.forceNewMessage();
-      resetDraftLaneState(answerLane);
+      resetDraftLaneState(answerLane, { nextLogicalOutput: true });
     };
     // Tear the window down (delete) — only when there is NO bar to keep it on
     // screen for (error final, or a turn with nothing to summarize). A bar
@@ -2100,7 +2115,7 @@ export const dispatchTelegramMessage = async ({
         await rotateAnswerLaneAfterToolProgress();
       } else {
         await answerLane.stream?.clear();
-        resetDraftLaneState(answerLane);
+        resetDraftLaneState(answerLane, { nextLogicalOutput: true });
       }
     };
     const deliverProgressModeFinalAnswer = async (
@@ -2675,7 +2690,7 @@ export const dispatchTelegramMessage = async ({
                         enqueueDraftLaneEvent(async () => {
                           if (splitReasoningOnNextStream) {
                             reasoningLane.stream?.forceNewMessage();
-                            resetDraftLaneState(reasoningLane);
+                            resetDraftLaneState(reasoningLane, { nextLogicalOutput: true });
                             splitReasoningOnNextStream = false;
                           }
                           await ingestDraftLaneSegments(payload, true);

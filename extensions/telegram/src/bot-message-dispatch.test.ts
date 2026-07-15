@@ -2289,6 +2289,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext() });
 
+    expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenCalledTimes(3);
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Normal reply");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Normal reply");

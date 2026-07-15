@@ -87,6 +87,8 @@ type DeliverLaneTextParams = {
   durable?: boolean;
 };
 
+const MIN_VISIBLE_PREVIEW_RECOVERY_CHARS = 1000;
+
 function result(
   kind: LaneDeliveryResult["kind"],
   delivery?: LanePreviewFinalizedDeliveryInput,
@@ -133,9 +135,18 @@ function isDeliveredPrefix(params: { deliveredText: string | undefined; finalTex
   );
 }
 
-function hasCommittedPreview(liveOutput: LiveOutputContinuity, text: string | undefined): boolean {
+function hasRecoverableVisiblePreview(
+  liveOutput: LiveOutputContinuity,
+  text: string | undefined,
+): boolean {
   const committedText = liveOutput.snapshot().committedText;
-  return text !== undefined && committedText.trim().length > 0 && text.startsWith(committedText);
+  if (text === undefined) {
+    return false;
+  }
+  return (
+    (committedText.trim().length > 0 && text.startsWith(committedText)) ||
+    text.trim().length >= MIN_VISIBLE_PREVIEW_RECOVERY_CHARS
+  );
 }
 
 export function createTelegramLaneLiveOutput(params: {
@@ -350,7 +361,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const finalResolution =
       useFinalTextRecovery &&
       deliveredStreamTextBeforeUpdate !== undefined &&
-      hasCommittedPreview(lane.liveOutput, deliveredStreamTextBeforeUpdate)
+      hasRecoverableVisiblePreview(lane.liveOutput, deliveredStreamTextBeforeUpdate)
         ? resolveLiveOutputFinalText({
             committedText: deliveredStreamTextBeforeUpdate,
             finalText,

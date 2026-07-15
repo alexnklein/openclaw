@@ -1345,6 +1345,50 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(phases).toContain("fallback_step");
   });
 
+  it("clears fallback state without emitting a visible cleared notice", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      fallbackNoticeSelectedModel: "anthropic/claude",
+      fallbackNoticeActiveModel: "openai/gpt-5.5",
+      fallbackNoticeReason: "timeout",
+    };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      runOverrides: {
+        provider: "anthropic",
+        model: "claude",
+      },
+    });
+    const phases: string[] = [];
+    const off = onAgentEvent((evt) => {
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+      if (evt.stream === "lifecycle" && phase) {
+        phases.push(phase);
+      }
+    });
+    const res = await run();
+    off();
+    const payloads = Array.isArray(res) ? res : res ? [res] : [];
+    const visibleText = payloads.map((payload) => payload.text).join("\n");
+
+    expect(visibleText).toBe("final");
+    expect(visibleText).not.toContain("Model Fallback cleared");
+    expect(visibleText).not.toContain("openai/gpt-5.5");
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+    expect(phases).toContain("fallback_cleared");
+  });
+
   it("does not report an exhausted fallback candidate as a successful winner", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-exhausted-trace-"));
     const storePath = join(root, "sessions.json");
