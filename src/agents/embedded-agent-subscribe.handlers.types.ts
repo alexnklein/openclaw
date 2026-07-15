@@ -278,6 +278,7 @@ type ToolHandlerParams = Pick<
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
   | "onAgentToolResult"
+  | "onSemanticAction"
   | "onToolResult"
   | "config"
   | "messageChannel"

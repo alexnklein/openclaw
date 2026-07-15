@@ -460,6 +460,8 @@ describe("handleToolExecutionStart read path checks", () => {
 describe("handleToolExecutionEnd cron mutation tracking", () => {
   it("increments successfulCronAdds when cron add succeeds", async () => {
     const { ctx } = createTestContext();
+    const onSemanticAction = vi.fn();
+    ctx.params.onSemanticAction = onSemanticAction;
     await handleToolExecutionStart(
       ctx as never,
       {
@@ -483,10 +485,14 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
 
     expect(ctx.state.successfulCronAdds).toBe(1);
     expect(ctx.state.replayState.hadPotentialSideEffects).toBe(true);
+    expect(onSemanticAction).toHaveBeenCalledOnce();
+    expect(onSemanticAction).toHaveBeenCalledWith({ toolName: "cron", runId: "run-test" });
   });
 
   it("does not increment successfulCronAdds when cron add fails", async () => {
     const { ctx } = createTestContext();
+    const onSemanticAction = vi.fn();
+    ctx.params.onSemanticAction = onSemanticAction;
     await handleToolExecutionStart(
       ctx as never,
       {
@@ -511,6 +517,7 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(0);
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
+    expect(onSemanticAction).not.toHaveBeenCalled();
   });
 
   it("keeps pre-execution cron failures replay-safe", async () => {

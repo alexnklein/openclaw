@@ -85,6 +85,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Live observer called after successful semantic side effects. */
+  onSemanticAction?: (event: { toolName: string; runId: string }) => void;
   /** Signals that the attempt's own run-timeout watchdog is active. */
   onAttemptTimeoutArmed?: () => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */

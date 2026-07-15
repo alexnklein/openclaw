@@ -1237,6 +1237,9 @@ export async function handleToolExecutionEnd(
       replayInvalid: true,
       hadPotentialSideEffects: true,
     });
+    if (!isToolError) {
+      ctx.params.onSemanticAction?.({ toolName, runId });
+    }
   }
 
   // Commit messaging tool evidence on success, discard on error.

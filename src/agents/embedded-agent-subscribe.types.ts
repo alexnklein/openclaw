@@ -54,6 +54,12 @@ export type SubscribeEmbeddedAgentSessionParams = {
   hasDeliveredMessageToolOnlySourceReply?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
+  /**
+   * Called after a tool outcome proves a semantic side effect. Outer run
+   * orchestration uses this to suppress stale non-mutating finals from older
+   * attempts in the same session.
+   */
+  onSemanticAction?: (event: { toolName: string; runId: string }) => void;
   onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
   /** Expands window reasoning beyond "stream" mode for callers with their own display gate. */
   streamReasoningInNonStreamModes?: boolean;

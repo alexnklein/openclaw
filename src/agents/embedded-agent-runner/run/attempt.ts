@@ -3583,6 +3583,7 @@ export async function runEmbeddedAttempt(
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           hasDeliveredMessageToolOnlySourceReply: () => didDeliverSourceReplyViaMessageTool,
           onAgentToolResult: params.onAgentToolResult,
+          onSemanticAction: params.onSemanticAction,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,

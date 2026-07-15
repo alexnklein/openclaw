@@ -135,6 +135,11 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import {
+  hasSemanticActionRevisionAdvanced,
+  readSemanticActionRevision,
+  recordSemanticActionRevision,
+} from "../semantic-action-revision.js";
+import {
   resolveSessionSuspensionReason,
   resolveSessionSuspensionTarget,
   suspendSession,
@@ -354,6 +359,15 @@ function resolveAttemptDispatchApiKey(params: {
 
 function buildBeforeAgentFinalizeRetryPrompt(reason: string): string {
   return `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${reason}`;
+}
+
+function buildSemanticActionRefreshPrompt(originalPrompt: string): string {
+  return [
+    originalPrompt,
+    "Semantic state changed while the previous answer was running.",
+    "Before finalizing, re-check the shared action state and any authoritative external state relevant to the request.",
+    "If an action is now pending, running, completed, blocked, or obsolete, report that current state instead of presenting stale options.",
+  ].join("\n\n");
 }
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -1596,6 +1610,7 @@ async function runEmbeddedAgentInternal(
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let beforeAgentFinalizeRevisionAttempts = 0;
+      let semanticActionRefreshAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
@@ -2045,6 +2060,13 @@ async function runEmbeddedAgentInternal(
           }
 
           const attemptAbortController = new AbortController();
+          const semanticRevisionScope = {
+            sessionKey: resolvedSessionKey,
+            sessionId: activeSessionId ?? params.sessionId,
+          };
+          const semanticActionRevisionAtAttemptStart =
+            readSemanticActionRevision(semanticRevisionScope);
+          let semanticActionRecordedByAttempt = false;
           postCompactionAbortController = attemptAbortController;
           const parentAbortSignal = params.abortSignal;
           const relayParentAbort = (): void => {
@@ -2198,6 +2220,14 @@ async function runEmbeddedAgentInternal(
             beforeAgentStartResult,
             thinkLevel,
             onToolOutcome: observeToolOutcome,
+            onSemanticAction: (event) => {
+              semanticActionRecordedByAttempt = true;
+              recordSemanticActionRevision(semanticRevisionScope);
+              log.debug(
+                `semantic action revision advanced: runId=${params.runId} ` +
+                  `sessionKey=${params.sessionKey ?? "<none>"} tool=${event.toolName}`,
+              );
+            },
             allocateToolOutcomeOrdinal,
             onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
             onRunProgress: notifyRunProgress,
@@ -4114,6 +4144,41 @@ async function runEmbeddedAgentInternal(
               `before_agent_finalize requested one more pass: ` +
                 `runId=${params.runId} sessionId=${params.sessionId} ` +
                 `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
+            );
+            continue;
+          }
+
+          const hasStaleSemanticState =
+            !semanticActionRecordedByAttempt &&
+            hasSemanticActionRevisionAdvanced(
+              {
+                sessionKey: resolvedSessionKey,
+                sessionId: activeSessionId ?? params.sessionId,
+              },
+              semanticActionRevisionAtAttemptStart,
+            );
+          const shouldRefreshStaleSemanticFinal =
+            hasStaleSemanticState &&
+            semanticActionRefreshAttempts < 1 &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !emptyAssistantReplyIsSilent &&
+            payloadCount > 0 &&
+            !attempt.replayMetadata.hadPotentialSideEffects;
+          if (shouldRefreshStaleSemanticFinal) {
+            semanticActionRefreshAttempts += 1;
+            nextAttemptPromptOverride = buildSemanticActionRefreshPrompt(params.prompt);
+            suppressNextUserMessagePersistence = true;
+            reasoningOnlyRetryInstruction = null;
+            emptyResponseRetryInstruction = null;
+            compactionContinuationRetryInstruction = null;
+            log.warn(
+              `semantic action state changed before final dispatch: ` +
+                `runId=${params.runId} sessionId=${params.sessionId} ` +
+                `attempt=${semanticActionRefreshAttempts}/1 - retrying with fresh state check`,
             );
             continue;
           }
