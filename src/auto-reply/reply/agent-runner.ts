@@ -51,11 +51,7 @@ import {
   formatTokenCount,
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
-import {
-  buildFallbackClearedNotice,
-  buildFallbackNotice,
-  resolveFallbackTransition,
-} from "../fallback-state.js";
+import { resolveFallbackTransition } from "../fallback-state.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
   isReplyPayloadStatusNotice,
@@ -177,9 +173,7 @@ function buildSilentFallbackFailurePayload(params: {
     return undefined;
   }
   return markReplyPayloadForSourceSuppressionDelivery({
-    text:
-      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
-      `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    text: "⚠️ I couldn't produce a visible reply after retrying another model. Please try again.",
     isError: true,
   });
 }
@@ -2018,7 +2012,6 @@ export async function runReplyAgent(params: {
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
     };
 
-    const fallbackNoticePayloads: ReplyPayload[] = [];
     if (
       !fallbackExhausted &&
       !preserveUserFacingSessionState &&
@@ -2039,22 +2032,6 @@ export async function runReplyAgent(params: {
           attempts: fallbackAttempts,
         },
       });
-      const fallbackNotice = buildFallbackNotice({
-        selectedProvider,
-        selectedModel,
-        activeProvider: providerUsed,
-        activeModel: modelUsed,
-        attempts: fallbackAttempts,
-        cfg,
-      });
-      if (fallbackNotice) {
-        fallbackNoticePayloads.push(
-          markReplyPayloadForSourceSuppressionDelivery({
-            text: fallbackNotice,
-            isFallbackNotice: true,
-          }),
-        );
-      }
     }
     if (
       !fallbackExhausted &&
@@ -2074,22 +2051,12 @@ export async function runReplyAgent(params: {
           previousActiveModel: fallbackTransition.previousState.activeModel,
         },
       });
-      fallbackNoticePayloads.push(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: buildFallbackClearedNotice({
-            selectedProvider,
-            selectedModel,
-            previousActiveModel: fallbackTransition.previousState.activeModel,
-          }),
-          isFallbackNotice: true,
-        }),
-      );
     }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
-    if (payloadArray.length === 0 && fallbackNoticePayloads.length === 0) {
+    if (payloadArray.length === 0) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
@@ -2100,10 +2067,7 @@ export async function runReplyAgent(params: {
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
       config: cfg,
-      payloads:
-        fallbackNoticePayloads.length > 0
-          ? [...fallbackNoticePayloads, ...payloadArray]
-          : payloadArray,
+      payloads: payloadArray,
       isHeartbeat,
       didLogHeartbeatStrip,
       silentExpected: followupRun.run.silentExpected,
@@ -2263,8 +2227,7 @@ export async function runReplyAgent(params: {
       });
     }
 
-    // Prepend verbose operational notices. Model fallback notices are prepared
-    // earlier so they pass through normal reply threading and stream-dedupe.
+    // Prepend verbose operational notices that remain safe for ordinary replies.
     let finalPayloads = guardedReplyPayloads;
     const prefixNotices: ReplyPayload[] = [];
 

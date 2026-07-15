@@ -1212,7 +1212,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     vi.useRealTimers();
   });
 
-  it("announces model fallback transitions across verbose levels", async () => {
+  it("records model fallback transitions across verbose levels without visible notices", async () => {
     const cases = [
       { name: "verbose on", verbose: "on" as const },
       { name: "verbose off", verbose: "off" as const },
@@ -1267,11 +1267,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       const res = await run();
       off();
-      const payload = Array.isArray(res)
-        ? (res[0] as { text?: string })
-        : (res as { text?: string });
-      expect(payload.text, testCase.name).toContain("Model Fallback:");
-      expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+      const visibleText = payloads.map((payload) => payload.text).join("\n");
+      expect(visibleText, testCase.name).toBe("final");
+      expect(visibleText, testCase.name).not.toContain("Model Fallback:");
+      expect(visibleText, testCase.name).not.toContain("deepinfra/moonshotai/Kimi-K2.5");
       expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
       expect(
         phases.filter((phase) => phase === "fallback"),
@@ -1279,6 +1279,70 @@ describe("runReplyAgent typing (heartbeat)", () => {
       ).toHaveLength(1);
       expect(phases, testCase.name).toContain("fallback_step");
     }
+  });
+
+  it("suppresses standalone model fallback notices in ordinary replies", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { group: sessionEntry };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+      const { run, onFallbackStep } = args;
+      await onFallbackStep?.({
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "openai/gpt-5.6-sol",
+        fallbackStepToModel: "openai/gpt-5.5",
+        fallbackStepFromFailureReason: "timeout",
+        fallbackStepFinalOutcome: "succeeded",
+      });
+      return {
+        outcome: "completed" as const,
+        result: await run("openai", "gpt-5.5"),
+        provider: "openai",
+        model: "gpt-5.5",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.6-sol",
+            error: "LLM idle timeout",
+            reason: "timeout",
+          },
+        ],
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "group",
+      sessionCtx: {
+        Provider: "telegram",
+        ChatType: "group",
+        From: "telegram:group:-100123",
+        To: "telegram:group:-100123",
+      },
+    });
+    const phases: string[] = [];
+    const off = onAgentEvent((evt) => {
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+      if (evt.stream === "lifecycle" && phase) {
+        phases.push(phase);
+      }
+    });
+    const res = await run();
+    off();
+    const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+    expect(payloads.map((payload) => payload.text).join("\n")).toBe("final");
+    expect(payloads.some((payload) => payload.text?.includes("Model Fallback:"))).toBe(false);
+    expect(sessionEntry.fallbackNoticeReason).toBeTruthy();
+    expect(phases).toContain("fallback");
+    expect(phases).toContain("fallback_step");
   });
 
   it("does not report an exhausted fallback candidate as a successful winner", async () => {
@@ -1502,7 +1566,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     const payload = Array.isArray(res) ? res[0] : res;
     expect(payload?.isError).toBe(true);
-    expect(payload?.text).toContain("Fallback used google/gemini-2.5-flash");
+    expect(payload?.text).toBe(
+      "⚠️ I couldn't produce a visible reply after retrying another model. Please try again.",
+    );
+    expect(payload?.text).not.toContain("google/gemini-2.5-flash");
     expect(sessionEntry.modelProvider).toBe("openai");
     expect(sessionEntry.model).toBe("gpt-5.5");
     expect(sessionEntry.providerOverride).toBeUndefined();
@@ -1513,7 +1580,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
   });
 
-  it("keeps fallback transition notices when block streaming has no final text", async () => {
+  it("does not emit fallback-only payloads when block streaming has no final text", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1551,19 +1618,26 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
       });
+      const phases: string[] = [];
+      const off = onAgentEvent((evt) => {
+        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+        if (evt.stream === "lifecycle" && phase) {
+          phases.push(phase);
+        }
+      });
       const res = await run();
-      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+      off();
 
       expect(onBlockReply).toHaveBeenCalled();
-      expect(payloads).toHaveLength(1);
-      expect(payloads[0]?.text).toContain("Model Fallback:");
-      expect(payloads[0]?.text).not.toContain("streamed answer");
+      expect(res).toBeUndefined();
+      expect(sessionEntry.fallbackNoticeReason).toBe("rate limit");
+      expect(phases).toContain("fallback");
     } finally {
       fallbackSpy.mockRestore();
     }
   });
 
-  it("threads fallback notices without consuming the first assistant reply slot", async () => {
+  it("keeps fallback telemetry from consuming the first assistant reply slot", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1610,11 +1684,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const res = await run();
       const payloads = Array.isArray(res) ? res : res ? [res] : [];
 
-      expect(payloads).toHaveLength(2);
-      expect(payloads[0]?.text).toContain("Model Fallback:");
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.text).toBe("final");
       expect(payloads[0]?.replyToId).toBe("msg");
-      expect(payloads[1]?.text).toBe("final");
-      expect(payloads[1]?.replyToId).toBe("msg");
+      expect(sessionEntry.fallbackNoticeReason).toBe("rate limit");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1660,9 +1733,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const payload = Array.isArray(res) ? res[0] : res;
 
       expect(payload?.isError).toBe(true);
-      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
-      expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
-      expect(payload?.text).toContain("no visible reply");
+      expect(payload?.text).toBe(
+        "⚠️ I couldn't produce a visible reply after retrying another model. Please try again.",
+      );
+      expect(payload?.text).not.toContain("lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).not.toContain("openai/gpt-5.5");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1708,9 +1783,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const payload = Array.isArray(res) ? res[0] : res;
 
       expect(payload?.isError).toBe(true);
-      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
-      expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
-      expect(payload?.text).toContain("no visible reply");
+      expect(payload?.text).toBe(
+        "⚠️ I couldn't produce a visible reply after retrying another model. Please try again.",
+      );
+      expect(payload?.text).not.toContain("lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).not.toContain("openai/gpt-5.5");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1749,12 +1826,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const payload = Array.isArray(res) ? res[0] : res;
 
     expect(payload?.isError).toBe(true);
-    expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
-    expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
-    expect(payload?.text).toContain("no visible reply");
+    expect(payload?.text).toBe(
+      "⚠️ I couldn't produce a visible reply after retrying another model. Please try again.",
+    );
+    expect(payload?.text).not.toContain("lmstudio/gemma-4-e4b-it");
+    expect(payload?.text).not.toContain("openai/gpt-5.5");
   });
 
-  it("announces fallback without silence failure when fallback already replied through a messaging tool", async () => {
+  it("does not emit fallback-only payloads when fallback already replied through a messaging tool", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "already sent" }],
       messagingToolSentTexts: ["already sent"],
@@ -1797,11 +1876,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
 
       const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(res).toBeUndefined();
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1846,11 +1922,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
 
       const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(res).toBeUndefined();
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1904,14 +1977,17 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const payload = Array.isArray(res) ? res[0] : res;
 
       expect(payload?.isError).toBe(true);
-      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
-      expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
+      expect(payload?.text).toBe(
+        "⚠️ I couldn't produce a visible reply after retrying another model. Please try again.",
+      );
+      expect(payload?.text).not.toContain("lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).not.toContain("openai/gpt-5.5");
     } finally {
       fallbackSpy.mockRestore();
     }
   });
 
-  it("announces fallback without silence failure when fallback already completed a cron side effect", async () => {
+  it("does not emit fallback-only payloads after a cron side effect", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       successfulCronAdds: 1,
@@ -1953,17 +2029,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
 
       const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(res).toBeUndefined();
     } finally {
       fallbackSpy.mockRestore();
     }
   });
 
-  it("announces fallback without silence failure when fallback committed target-only messaging delivery", async () => {
+  it("does not emit fallback-only payloads after target-only messaging delivery", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
@@ -2005,17 +2078,14 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
 
       const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(res).toBeUndefined();
     } finally {
       fallbackSpy.mockRestore();
     }
   });
 
-  it("announces fallback without silence failure when fallback already delivered an approval prompt", async () => {
+  it("does not emit fallback-only payloads after an approval prompt", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       didSendDeterministicApprovalPrompt: true,
@@ -2054,11 +2124,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
 
       const res = await run();
-      const payload = Array.isArray(res) ? res[0] : res;
 
-      expect(payload?.isError).not.toBe(true);
-      expect(payload?.text).toContain("Model Fallback:");
-      expect(payload?.text).not.toContain("no visible reply");
+      expect(res).toBeUndefined();
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -2111,7 +2178,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces model fallback only once per active fallback state", async () => {
+  it("emits model fallback lifecycle only once per active fallback state", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -2159,15 +2226,15 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).not.toContain("Model Fallback:");
+      expect(firstText).toBe("final");
+      expect(secondText).toBe("final");
       expect(fallbackEvents).toHaveLength(1);
     } finally {
       fallbackSpy.mockRestore();
     }
   });
 
-  it("re-announces model fallback after returning to selected model", async () => {
+  it("emits model fallback lifecycle again after returning to selected model", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -2224,22 +2291,32 @@ describe("runReplyAgent typing (heartbeat)", () => {
         sessionStore,
         sessionKey: "main",
       });
+      const phases: string[] = [];
+      const off = onAgentEvent((evt) => {
+        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+        if (evt.stream === "lifecycle" && phase) {
+          phases.push(phase);
+        }
+      });
       const first = await run();
       const second = await run();
       const third = await run();
+      off();
 
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).not.toContain("Model Fallback:");
-      expect(thirdText).toContain("Model Fallback:");
+      expect(firstText).toBe("final");
+      expect(secondText).toBe("final");
+      expect(thirdText).toBe("final");
+      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(2);
+      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
     } finally {
       fallbackSpy.mockRestore();
     }
   });
 
-  it("announces fallback-cleared once when runtime returns to selected model", async () => {
+  it("emits fallback-cleared once when runtime returns to selected model", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -2311,9 +2388,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).toContain("Model Fallback cleared:");
-      expect(thirdText).not.toContain("Model Fallback cleared:");
+      expect(firstText).toBe("final");
+      expect(secondText).toBe("final");
+      expect(thirdText).toBe("final");
       expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
       expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
     } finally {
@@ -2321,7 +2398,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
+  it("emits fallback lifecycle events while verbose is off without visible notices", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -2391,8 +2468,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).toContain("Model Fallback cleared:");
+      expect(firstText).toBe("final");
+      expect(secondText).toBe("final");
       expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
       expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
     } finally {
