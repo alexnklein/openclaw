@@ -112,6 +112,7 @@ import {
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import {
   createLaneDeliveryStateTracker,
+  createTelegramLaneLiveOutput,
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneDeliveryResult,
@@ -988,6 +989,7 @@ export const dispatchTelegramMessage = async ({
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
+  const logicalTurnId = `${chatId}:${ctxPayload.MessageSid ?? msg.message_id ?? dispatchStartedAt}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
@@ -1002,7 +1004,13 @@ export const dispatchTelegramMessage = async ({
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {
-              lanes[laneName].activeChunkIndex += 1;
+              const lane = lanes[laneName];
+              lane.activeChunkIndex += 1;
+              lane.liveOutput.markCommittedText({
+                text: superseded.textSnapshot,
+                mode: "append",
+                receipt: createPreviewMessageReceipt({ id: superseded.messageId }),
+              });
               return;
             }
             void bot.api.deleteMessage(chatId, superseded.messageId).catch((err: unknown) => {
@@ -1017,6 +1025,11 @@ export const dispatchTelegramMessage = async ({
       : undefined;
     return {
       stream,
+      liveOutput: createTelegramLaneLiveOutput({
+        accountId: route.accountId,
+        laneName,
+        turnId: logicalTurnId,
+      }),
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,
@@ -1527,7 +1540,7 @@ export const dispatchTelegramMessage = async ({
   const endTelegramInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
   const sessionKey = ctxPayload.SessionKey;
   let transcriptMirrorSequence = 0;
-  const transcriptMirrorTurnId = `${chatId}:${ctxPayload.MessageSid ?? msg.message_id ?? dispatchStartedAt}`;
+  const transcriptMirrorTurnId = logicalTurnId;
   let currentTurnTranscriptFinal: CurrentTurnTranscriptFinal | undefined;
   const resolveCurrentTurnTranscriptFinal = async (): Promise<
     CurrentTurnTranscriptFinal | undefined
@@ -1815,6 +1828,7 @@ export const dispatchTelegramMessage = async ({
         await stream.stop();
         if (typeof stream.messageId() === "number" || stream.sendMayHaveLanded?.()) {
           lane.finalized = true;
+          lane.liveOutput.markAbortedResumable("handler-timeout");
           deliveryState.markDelivered();
         }
       }

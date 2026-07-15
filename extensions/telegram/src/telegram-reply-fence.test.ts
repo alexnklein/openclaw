@@ -1,11 +1,14 @@
 // Telegram tests cover telegram reply fence plugin behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   beginTelegramReplyFence,
+  buildTelegramReplyFenceLaneKey,
   buildTelegramNonInterruptingReplyFenceKey,
   resetTelegramReplyFenceForTests,
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
+  supersedeTelegramReplyFenceLane,
+  terminalizeTelegramReplyFenceLane,
 } from "./telegram-reply-fence.js";
 
 describe("shouldSupersedeTelegramReplyFence", () => {
@@ -133,6 +136,31 @@ describe("telegram reply fence supersede", () => {
     expect(supersedeTelegramReplyFence(activeKey)).toBe(true);
     expect(mainController.signal.aborted).toBe(true);
     expect(sideController.signal.aborted).toBe(true);
+    resetTelegramReplyFenceForTests();
+  });
+
+  it("terminalizes handler-timeout lanes without treating supersession as terminal", async () => {
+    resetTelegramReplyFenceForTests();
+    const terminalizer = vi.fn();
+    const controller = new AbortController();
+    const laneKey = buildTelegramReplyFenceLaneKey({
+      accountId: "default",
+      sequentialKey: "telegram:123",
+    });
+    beginTelegramReplyFence({
+      key: "agent:main:telegram:direct:123",
+      supersede: true,
+      abortController: controller,
+      laneKey,
+      terminalizer,
+    });
+
+    expect(supersedeTelegramReplyFenceLane(laneKey)).toBe(true);
+    expect(controller.signal.aborted).toBe(true);
+    expect(terminalizer).not.toHaveBeenCalled();
+
+    await terminalizeTelegramReplyFenceLane(laneKey, { reason: "handler-timeout" });
+    expect(terminalizer).toHaveBeenCalledWith({ reason: "handler-timeout" });
     resetTelegramReplyFenceForTests();
   });
 });

@@ -24,13 +24,16 @@ export {
 } from "./contracts.js";
 export {
   createLiveMessageState,
+  createLiveOutputContinuity,
   createPreviewMessageReceipt,
   defineFinalizableLivePreviewAdapter,
+  buildLiveOutputContinuationText,
   deliverFinalizableLivePreview,
   deliverWithFinalizableLivePreviewAdapter,
   markLiveMessageCancelled,
   markLiveMessageFinalized,
   markLiveMessagePreviewUpdated,
+  resolveLiveOutputFinalText,
 } from "./live.js";
 export {
   createMessageReceiptFromOutboundResults,
@@ -106,6 +109,10 @@ export type {
 export type {
   LivePreviewFinalizerDraft,
   FinalizableLivePreviewAdapter,
+  LiveOutputContinuity,
+  LiveOutputCommittedTextMode,
+  LiveOutputFinalTextResolution,
+  LiveOutputTerminalState,
   LivePreviewFinalizerResult,
   LivePreviewFinalizerResultKind,
 } from "./live.js";

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createLiveMessageState,
+  createLiveOutputContinuity,
   defineFinalizableLivePreviewAdapter,
   deliverFinalizableLivePreview,
   deliverWithFinalizableLivePreviewAdapter,
@@ -66,6 +67,65 @@ describe("message lifecycle primitives", () => {
     const updated = markLiveMessagePreviewUpdated(preview, rendered);
     expect(updated.phase).toBe("previewing");
     expect(updated.lastRendered).toBe(rendered);
+  });
+
+  it("keeps live output continuity across provider attempts under one logical id", () => {
+    const output = createLiveOutputContinuity({ id: "telegram:acct:turn-1:answer" });
+    output.markCommittedText({ text: "stable preview" });
+
+    expect(output.resolveFinalText("stable preview continued")).toEqual({
+      kind: "same-prefix",
+      committedText: "stable preview",
+      remainingText: " continued",
+    });
+
+    output.markCommittedText({ text: " plus page", mode: "append" });
+    expect(output.snapshot()).toMatchObject({
+      id: "telegram:acct:turn-1:answer",
+      committedText: "stable preview plus page",
+      terminal: { kind: "open" },
+    });
+  });
+
+  it("requires explicit continuation for divergent fallback output", () => {
+    const output = createLiveOutputContinuity({ id: "telegram:acct:turn-2:answer" });
+    output.markCommittedText({ text: "already visible" });
+
+    expect(output.resolveFinalText("different model answer")).toEqual({
+      kind: "divergent-continuation",
+      committedText: "already visible",
+      continuationText: "Continued response:\n\ndifferent model answer",
+    });
+    expect(output.markContinued()).toEqual({
+      kind: "continued",
+      committedText: "already visible",
+    });
+  });
+
+  it("marks handler timeout as aborted and resumable", () => {
+    const output = createLiveOutputContinuity({ id: "telegram:acct:turn-3:answer" });
+    output.markCommittedText({ text: "visible before timeout" });
+
+    expect(output.markAbortedResumable("handler-timeout")).toEqual({
+      kind: "aborted-resumable",
+      reason: "handler-timeout",
+      committedText: "visible before timeout",
+    });
+    expect(output.markFinal()).toEqual({
+      kind: "aborted-resumable",
+      reason: "handler-timeout",
+      committedText: "visible before timeout",
+    });
+
+    output.markCommittedText({ text: "must not mutate after terminalization" });
+    expect(output.snapshot()).toMatchObject({
+      committedText: "visible before timeout",
+      terminal: {
+        kind: "aborted-resumable",
+        reason: "handler-timeout",
+        committedText: "visible before timeout",
+      },
+    });
   });
 
   it("finalizes live previews in place with preview receipts", async () => {

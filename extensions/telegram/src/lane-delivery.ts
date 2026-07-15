@@ -4,6 +4,7 @@ export {
   selectLongerFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
 export {
+  createTelegramLaneLiveOutput,
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneDeliveryResult,

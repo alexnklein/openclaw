@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import {
   createLaneTextDeliverer,
+  createTelegramLaneLiveOutput,
   type DraftLaneState,
   type LaneDeliveryResult,
   type LaneName,
@@ -29,6 +30,11 @@ function createHarness(params?: {
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: {
       stream: answer,
+      liveOutput: createTelegramLaneLiveOutput({
+        accountId: "test",
+        laneName: "answer",
+        turnId: "turn",
+      }),
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,
@@ -36,6 +42,11 @@ function createHarness(params?: {
     },
     reasoning: {
       stream: reasoning,
+      liveOutput: createTelegramLaneLiveOutput({
+        accountId: "test",
+        laneName: "reasoning",
+        turnId: "turn",
+      }),
       lastPartialText: "",
       hasStreamedMessage: false,
       finalized: false,

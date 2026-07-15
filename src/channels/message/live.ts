@@ -28,6 +28,39 @@ export type LivePreviewFinalizerResult<TPayload> = {
   liveState?: LiveMessageState<TPayload>;
 };
 
+export type LiveOutputTerminalState =
+  | { kind: "open" }
+  | { kind: "final"; committedText: string }
+  | { kind: "continued"; committedText: string }
+  | { kind: "aborted-resumable"; reason: "handler-timeout"; committedText: string };
+
+export type LiveOutputFinalTextResolution =
+  | { kind: "uncommitted"; finalText: string }
+  | { kind: "same-prefix"; committedText: string; remainingText: string }
+  | { kind: "committed-superset"; committedText: string }
+  | { kind: "divergent-continuation"; committedText: string; continuationText: string };
+
+export type LiveOutputCommittedTextMode = "replace" | "append";
+
+export type LiveOutputContinuity = {
+  readonly id: string;
+  markCommittedText: (params: {
+    text: string;
+    mode?: LiveOutputCommittedTextMode;
+    receipt?: MessageReceipt;
+  }) => void;
+  resolveFinalText: (finalText: string) => LiveOutputFinalTextResolution;
+  markFinal: () => LiveOutputTerminalState;
+  markContinued: () => LiveOutputTerminalState;
+  markAbortedResumable: (reason: "handler-timeout") => LiveOutputTerminalState;
+  snapshot: () => {
+    id: string;
+    committedText: string;
+    receipts: readonly MessageReceipt[];
+    terminal: LiveOutputTerminalState;
+  };
+};
+
 /** Adapter contract for channels that can edit a draft preview into the final message. */
 export type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
   draft?: LivePreviewFinalizerDraft<TId>;
@@ -57,6 +90,73 @@ export function defineFinalizableLivePreviewAdapter<TPayload, TId, TEdit>(
   adapter: FinalizableLivePreviewAdapter<TPayload, TId, TEdit>,
 ): FinalizableLivePreviewAdapter<TPayload, TId, TEdit> {
   return adapter;
+}
+
+export function buildLiveOutputContinuationText(text: string): string {
+  return `Continued response:\n\n${text.trimStart()}`;
+}
+
+export function resolveLiveOutputFinalText(params: {
+  committedText: string;
+  finalText: string;
+}): LiveOutputFinalTextResolution {
+  if (params.committedText.length === 0) {
+    return { kind: "uncommitted", finalText: params.finalText };
+  }
+  if (
+    params.finalText === params.committedText ||
+    params.committedText.startsWith(params.finalText)
+  ) {
+    return { kind: "committed-superset", committedText: params.committedText };
+  }
+  if (params.finalText.startsWith(params.committedText)) {
+    return {
+      kind: "same-prefix",
+      committedText: params.committedText,
+      remainingText: params.finalText.slice(params.committedText.length),
+    };
+  }
+  return {
+    kind: "divergent-continuation",
+    committedText: params.committedText,
+    continuationText: buildLiveOutputContinuationText(params.finalText),
+  };
+}
+
+export function createLiveOutputContinuity(params: { id: string }): LiveOutputContinuity {
+  let committedText = "";
+  let receipts: MessageReceipt[] = [];
+  let terminal: LiveOutputTerminalState = { kind: "open" };
+
+  const terminalWith = (next: LiveOutputTerminalState): LiveOutputTerminalState => {
+    terminal = terminal.kind === "open" ? next : terminal;
+    return terminal;
+  };
+
+  return {
+    id: params.id,
+    markCommittedText: ({ text, mode, receipt }) => {
+      if (terminal.kind !== "open") {
+        return;
+      }
+      const nextText = mode === "append" ? `${committedText}${text}` : text;
+      committedText = nextText;
+      if (receipt) {
+        receipts = [...receipts, receipt];
+      }
+    },
+    resolveFinalText: (finalText) => resolveLiveOutputFinalText({ committedText, finalText }),
+    markFinal: () => terminalWith({ kind: "final", committedText }),
+    markContinued: () => terminalWith({ kind: "continued", committedText }),
+    markAbortedResumable: (reason) =>
+      terminalWith({ kind: "aborted-resumable", reason, committedText }),
+    snapshot: () => ({
+      id: params.id,
+      committedText,
+      receipts: [...receipts],
+      terminal,
+    }),
+  };
 }
 
 /** Creates the initial live-message state, optionally seeded with an existing preview receipt. */

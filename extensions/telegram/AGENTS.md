@@ -56,8 +56,9 @@ Verified against Telegram Bot API 10.1, July 1 2026.
   requires a separate `sendMessage`. OpenClaw uses `sendMessage` plus
   `editMessageText`, then finalizes in place so the user sees one persistent
   answer.
-- Streaming owns one visible preview message. Edit it forward. Do not send an
-  extra final bubble unless the final edit genuinely failed.
+- Streaming owns one active editable preview message. When Telegram's text
+  limit is near, retain completed preview pages and continue in a new editable
+  message; do not duplicate committed text in the final.
 - Keep the first-preview debounce. If a provider sends token-sized deltas,
   coalesce them into cumulative preview text instead of removing the debounce.
 - Respect Telegram limits in the Telegram layer. Text over 4096 chars chains

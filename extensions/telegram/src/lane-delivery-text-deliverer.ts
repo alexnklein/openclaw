@@ -1,6 +1,10 @@
 // Telegram plugin module implements lane delivery text deliverer behavior.
 import {
+  buildLiveOutputContinuationText,
+  createLiveOutputContinuity,
   createPreviewMessageReceipt,
+  resolveLiveOutputFinalText,
+  type LiveOutputContinuity,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -20,6 +24,7 @@ export type LaneName = "answer" | "reasoning";
 
 export type DraftLaneState = {
   stream: TelegramDraftStream | undefined;
+  liveOutput: LiveOutputContinuity;
   lastPartialText: string;
   hasStreamedMessage: boolean;
   finalized: boolean;
@@ -128,12 +133,21 @@ function isDeliveredPrefix(params: { deliveredText: string | undefined; finalTex
   );
 }
 
-function buildExplicitContinuationText(text: string): string {
-  return `Continued response:\n\n${text.trimStart()}`;
+function isSignificantCommittedPreview(text: string | undefined, _draftMaxChars: number): boolean {
+  return text !== undefined && text.trim().length >= 1000;
 }
 
-function isSignificantCommittedPreview(text: string, draftMaxChars: number): boolean {
-  return text.trim().length >= Math.min(1000, Math.max(1, Math.floor(draftMaxChars / 2)));
+export function createTelegramLaneLiveOutput(params: {
+  accountId: string;
+  laneName: LaneName;
+  turnId: string;
+}): LiveOutputContinuity {
+  // Process-lifetime logical output checkpoint for retained Telegram preview pages.
+  // Provider/model retries keep this lane state; process crash still loses preview
+  // checkpoints until this moves into the channel state DB.
+  return createLiveOutputContinuity({
+    id: `telegram:${params.accountId}:${params.turnId}:${params.laneName}`,
+  });
 }
 
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
@@ -332,14 +346,19 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         finalText,
       }) &&
       deliveredStreamTextBeforeUpdate.length > activeChunk.trimEnd().length;
-    const divergentDeliveredTextBeforeUpdate =
+    const finalResolution =
       useFinalTextRecovery &&
       deliveredStreamTextBeforeUpdate !== undefined &&
-      isSignificantCommittedPreview(deliveredStreamTextBeforeUpdate, params.draftMaxChars) &&
-      !isDeliveredPrefix({
-        deliveredText: deliveredStreamTextBeforeUpdate,
-        finalText,
-      });
+      isSignificantCommittedPreview(deliveredStreamTextBeforeUpdate, params.draftMaxChars)
+        ? resolveLiveOutputFinalText({
+            committedText: deliveredStreamTextBeforeUpdate,
+            finalText,
+          })
+        : undefined;
+    const divergentDeliveredTextBeforeUpdate =
+      useFinalTextRecovery &&
+      finalResolution?.kind === "divergent-continuation" &&
+      !isPotentialTruncatedFinal(activeFullText);
 
     const finalizeDeliveredPrefix = async (
       deliveredStreamText: string,
@@ -370,6 +389,9 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           }
           await params.sendPayload(followUpPayload(payload, chunk));
         }
+        lane.liveOutput.markContinued();
+      } else {
+        lane.liveOutput.markFinal();
       }
       return result("preview-finalized", {
         content: text,
@@ -387,8 +409,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           lane.finalized = true;
           params.markDelivered();
           await params.sendPayload(
-            followUpPayload(payload, buildExplicitContinuationText(activeFullText)),
+            followUpPayload(
+              payload,
+              finalResolution?.kind === "divergent-continuation"
+                ? finalResolution.continuationText
+                : buildLiveOutputContinuationText(activeFullText),
+            ),
           );
+          lane.liveOutput.markContinued();
           return result("preview-retained");
         }
         return undefined;
@@ -396,8 +424,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       lane.finalized = true;
       params.markDelivered();
       await params.sendPayload(
-        followUpPayload(payload, buildExplicitContinuationText(activeFullText)),
+        followUpPayload(
+          payload,
+          finalResolution?.kind === "divergent-continuation"
+            ? finalResolution.continuationText
+            : buildLiveOutputContinuationText(activeFullText),
+        ),
       );
+      lane.liveOutput.markContinued();
       return result("preview-finalized", {
         content: text,
         promptContextContent: deliveredStreamTextBeforeUpdate,
@@ -444,6 +478,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         if (stream.sendMayHaveLanded?.()) {
           lane.finalized = true;
           params.markDelivered();
+          lane.liveOutput.markFinal();
           return result("preview-retained");
         }
         return undefined;
@@ -472,12 +507,20 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       lane.finalized = true;
       params.markDelivered();
+      if (remainingChunks.some((chunk) => chunk.trim().length > 0)) {
+        lane.liveOutput.markContinued();
+      } else {
+        lane.liveOutput.markFinal();
+      }
       return result("preview-finalized", {
         content: previewText,
         promptContextContent: previewText,
         messageId,
         buttonsAttached,
       });
+    }
+    if (retainedPreview && buttons && retainedPreview.length > params.draftMaxChars) {
+      return undefined;
     }
 
     if (!deliveredPrefixBeforeUpdate) {
@@ -511,6 +554,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       if (finalizePreview && stream.sendMayHaveLanded?.()) {
         lane.finalized = true;
         params.markDelivered();
+        lane.liveOutput.markFinal();
         return result("preview-retained");
       }
       if (!finalizePreview) {
@@ -558,11 +602,21 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
 
     if (finalizePreview) {
       lane.finalized = true;
+      lane.liveOutput.markCommittedText({
+        text: activeChunkAfterStop.trimEnd(),
+        receipt: createPreviewMessageReceipt({ id: messageId }),
+        mode: lane.activeChunkIndex > 0 ? "append" : "replace",
+      });
       for (const chunk of remainingChunksAfterStop) {
         if (chunk.trim().length === 0) {
           continue;
         }
         await params.sendPayload(followUpPayload(payload, chunk));
+      }
+      if (remainingChunksAfterStop.some((chunk) => chunk.trim().length > 0)) {
+        lane.liveOutput.markContinued();
+      } else {
+        lane.liveOutput.markFinal();
       }
       return result("preview-finalized", {
         content: text,
@@ -641,6 +695,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     });
     if (delivered && finalizePreview) {
       lane.finalized = true;
+      lane.liveOutput.markFinal();
     }
     return delivered ? result("sent") : result("skipped");
   };

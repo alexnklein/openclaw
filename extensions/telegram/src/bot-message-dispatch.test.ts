@@ -5846,6 +5846,42 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   });
 
+  it("keeps newer-message supersession quiet even with a visible preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const context = createContext({
+      ctxPayload: createDirectSessionPayload(),
+    });
+    let releaseDispatch: (() => void) | undefined;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "partial before newer message" });
+      await dispatchGate;
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+
+    const run = dispatchWithContext({ context, streamMode: "partial" });
+    await vi.waitFor(() => expect(answerDraftStream.update).toHaveBeenCalled());
+
+    const { buildTelegramReplyFenceLaneKey, supersedeTelegramReplyFenceLane } =
+      await import("./telegram-reply-fence.js");
+    const { getTelegramSequentialKey } = await import("./sequential-key.js");
+    supersedeTelegramReplyFenceLane(
+      buildTelegramReplyFenceLaneKey({
+        accountId: "default",
+        sequentialKey: getTelegramSequentialKey({
+          message: context.msg,
+          ...(context.primaryCtx.me ? { me: context.primaryCtx.me } : {}),
+        }),
+      }),
+    );
+    releaseDispatch?.();
+    await run;
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not suppress text-only blocks as delivered when answer draft is inactive", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
