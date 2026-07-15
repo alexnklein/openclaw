@@ -1,5 +1,6 @@
 // Semantic action continuity hooks keep mutable workflow actions fresh.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -597,8 +598,17 @@ function lazyStores(api: OpenClawPluginApi): () => SemanticActionContinuityStore
       const maxEntries = normalizeConfig(
         api.pluginConfig as Record<string, unknown> | undefined,
       ).maxLedgerEntries;
+      const stateDir =
+        typeof api.runtime.state.resolveStateDir === "function"
+          ? api.runtime.state.resolveStateDir()
+          : undefined;
       const open = <T>(options: OpenKeyedStoreOptions) =>
-        api.runtime.state.openKeyedStore<T>(options);
+        stateDir
+          ? createFileKeyedStore<T>({
+              ...options,
+              stateDir: path.join(stateDir, "semantic-action-continuity"),
+            })
+          : api.runtime.state.openKeyedStore<T>(options);
       stores = {
         runs: open<RunLedgerRecord>({ namespace: "semantic-action-continuity-runs", maxEntries }),
         observations: open<ObservationLedgerRecord>({
@@ -609,6 +619,162 @@ function lazyStores(api: OpenClawPluginApi): () => SemanticActionContinuityStore
     }
     return stores;
   };
+}
+
+type FileStoreEntry<T> = {
+  key: string;
+  value: T;
+  createdAt: number;
+  expiresAt?: number;
+};
+
+function createFileKeyedStore<T>(
+  options: OpenKeyedStoreOptions & { stateDir: string },
+): PluginStateKeyedStore<T> {
+  const filePath = path.join(options.stateDir, `${safeFileSegment(options.namespace)}.json`);
+  const maxEntries = Math.max(1, options.maxEntries);
+
+  const now = () => Date.now();
+
+  const readEntries = async (): Promise<FileStoreEntry<T>[]> => {
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed.filter(isFileStoreEntry<T>).filter((entry) => !isExpired(entry, now()));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+  };
+
+  const writeEntries = async (entries: FileStoreEntry<T>[]): Promise<void> => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    const bounded = entries
+      .filter((entry) => !isExpired(entry, now()))
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .slice(-maxEntries);
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(tempPath, `${JSON.stringify(bounded)}\n`, { mode: 0o600 });
+    await fs.rename(tempPath, filePath);
+  };
+
+  const ttlToExpiresAt = (ttlMs: number | undefined): number | undefined => {
+    const ttl = ttlMs ?? options.defaultTtlMs;
+    return typeof ttl === "number" && ttl > 0 ? now() + ttl : undefined;
+  };
+
+  return {
+    async register(key, value, opts) {
+      const entries = (await readEntries()).filter((entry) => entry.key !== key);
+      const expiresAt = ttlToExpiresAt(opts?.ttlMs);
+      entries.push({
+        key,
+        value,
+        createdAt: now(),
+        ...(expiresAt ? { expiresAt } : {}),
+      });
+      await writeEntries(entries);
+    },
+    async registerIfAbsent(key, value, opts) {
+      const entries = await readEntries();
+      if (entries.some((entry) => entry.key === key)) {
+        return false;
+      }
+      const expiresAt = ttlToExpiresAt(opts?.ttlMs);
+      entries.push({
+        key,
+        value,
+        createdAt: now(),
+        ...(expiresAt ? { expiresAt } : {}),
+      });
+      await writeEntries(entries);
+      return true;
+    },
+    async update(key, updateValue, opts) {
+      const entries = await readEntries();
+      const index = entries.findIndex((entry) => entry.key === key);
+      const current = index >= 0 ? entries[index]?.value : undefined;
+      const next = updateValue(current);
+      if (next === undefined) {
+        if (index < 0) {
+          return false;
+        }
+        entries.splice(index, 1);
+        await writeEntries(entries);
+        return true;
+      }
+      const expiresAt = ttlToExpiresAt(opts?.ttlMs);
+      const entry = {
+        key,
+        value: next,
+        createdAt: index >= 0 ? (entries[index]?.createdAt ?? now()) : now(),
+        ...(expiresAt ? { expiresAt } : {}),
+      };
+      if (index >= 0) {
+        entries[index] = entry;
+      } else {
+        entries.push(entry);
+      }
+      await writeEntries(entries);
+      return true;
+    },
+    async lookup(key) {
+      return (await readEntries()).find((entry) => entry.key === key)?.value;
+    },
+    async consume(key) {
+      const entries = await readEntries();
+      const index = entries.findIndex((entry) => entry.key === key);
+      if (index < 0) {
+        return undefined;
+      }
+      const [entry] = entries.splice(index, 1);
+      await writeEntries(entries);
+      return entry?.value;
+    },
+    async delete(key) {
+      const entries = await readEntries();
+      const next = entries.filter((entry) => entry.key !== key);
+      if (next.length === entries.length) {
+        return false;
+      }
+      await writeEntries(next);
+      return true;
+    },
+    async entries() {
+      return readEntries();
+    },
+    async clear() {
+      await writeEntries([]);
+    },
+  };
+}
+
+function isFileStoreEntry<T>(value: unknown): value is FileStoreEntry<T> {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as FileStoreEntry<T>).key === "string" &&
+    typeof (value as FileStoreEntry<T>).createdAt === "number" &&
+    "value" in value
+  );
+}
+
+function isExpired(entry: { expiresAt?: number }, nowMs: number): boolean {
+  return typeof entry.expiresAt === "number" && entry.expiresAt <= nowMs;
+}
+
+function safeFileSegment(value: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "");
+  if (normalized) {
+    return normalized.slice(0, 80);
+  }
+  return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
 function runKey(workflowId: string, runId: string): string {

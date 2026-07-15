@@ -287,6 +287,29 @@ describe("semantic action continuity plugin", () => {
     expect(second).toBeUndefined();
   });
 
+  it("uses local file state when runtime keyed state is unavailable for workspace plugins", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "semantic-action-continuity-state-"));
+    const loadSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({ revision: "old", status: "open", actions: ["wait"] })
+      .mockResolvedValueOnce({ revision: "new", status: "merged", actions: ["report merged"] });
+    const hooks = registerForTest(BASE_CONFIG, loadSnapshot, { stateDir });
+
+    const prompt = await runPrompt(hooks, {
+      prompt: "Check PR and offer merge options.",
+    });
+    expect(prompt?.prependContext).toContain("Revision: old");
+
+    const final = await runFinalize(hooks, { lastAssistantMessage: "Wait for merge." });
+
+    expect(final?.retry?.idempotencyKey).toBe(
+      "semantic-action-continuity:merge-workflow:run-1:revision:old:new",
+    );
+    await expect(
+      fs.access(path.join(stateDir, "semantic-action-continuity")),
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects response-only workflows because no prompt baseline can be captured", async () => {
     const loadSnapshot = vi.fn(async () => ({ revision: "unused" }));
     const hooks = registerForTest(
@@ -354,6 +377,7 @@ describe("semantic action continuity plugin", () => {
 function registerForTest(
   pluginConfig: Record<string, unknown>,
   loadSnapshot?: (params: unknown) => Promise<Snapshot>,
+  options: { stateDir?: string } = {},
 ): HookMap {
   const hooks: HookMap = {};
   const stores = new Map<string, PluginStateKeyedStore<unknown>>();
@@ -365,11 +389,15 @@ function registerForTest(
         current: () => buildConfig(pluginConfig),
       },
       state: {
-        openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+        ...(options.stateDir ? { resolveStateDir: () => options.stateDir } : {}),
+        openKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) => {
+          if (options.stateDir) {
+            throw new Error("openKeyedStore should not be used when resolveStateDir is available");
+          }
           const store =
-            stores.get(options.namespace) ??
-            createMemoryKeyedStore<unknown>({ maxEntries: options.maxEntries });
-          stores.set(options.namespace, store);
+            stores.get(storeOptions.namespace) ??
+            createMemoryKeyedStore<unknown>({ maxEntries: storeOptions.maxEntries });
+          stores.set(storeOptions.namespace, store);
           return store as PluginStateKeyedStore<T>;
         },
       },
