@@ -334,6 +334,7 @@ describe("semantic action continuity plugin", () => {
       adapter: {
         command: {
           file: process.execPath,
+          cwd: process.cwd(),
           args: [
             "-e",
             "process.stdout.write(JSON.stringify({revision:process.env.OPENCLAW_ACTION_CONTINUITY_WORKFLOW_ID + '-cmd', actions:['report']}))",
