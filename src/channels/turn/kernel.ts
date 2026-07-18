@@ -333,13 +333,14 @@ const ZERO_COUNT_VISIBLE_DISPATCH_FALLBACK_TEXT =
   "Reply generation failed before producing a visible answer. I logged the stall; please resend or ask for status.";
 
 function shouldDeliverZeroCountVisibleDispatchFallback<TDispatchResult>(
-  params: AssembledChannelTurn,
+  params: Pick<PreparedChannelTurn<TDispatchResult>, "admission" | "ctxPayload">,
   dispatchResult: TDispatchResult,
 ): boolean {
   if (params.admission?.kind === "observeOnly" || isSystemChannelTurn(params.ctxPayload)) {
     return false;
   }
-  return !hasVisibleChannelTurnDispatch(dispatchResult as ChannelTurnDispatchResultLike);
+  const result = dispatchResult as ChannelTurnDispatchResultLike;
+  return result?.noVisibleReplyFallbackEligible === true && !hasVisibleChannelTurnDispatch(result);
 }
 
 function markChannelDeliveryErrorVisible(error: unknown): unknown {
@@ -659,6 +660,12 @@ async function runPreparedChannelTurnCoreInTrace<
       options.suppressObserveOnlyDispatch && admission.kind === "observeOnly"
         ? resolveObserveOnlyDispatchResult(params)
         : await params.runDispatch();
+    if (
+      params.recoverZeroCountVisibleDispatch &&
+      shouldDeliverZeroCountVisibleDispatchFallback(params, dispatchResult)
+    ) {
+      dispatchResult = await params.recoverZeroCountVisibleDispatch(dispatchResult);
+    }
     maybeWarnZeroCountVisibleDispatch({
       ...params,
       admission,

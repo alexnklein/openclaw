@@ -385,6 +385,8 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
+  /** Channel-owned terminal recovery for a visible turn that produced no delivery. */
+  recoverZeroCountVisibleDispatch?: (dispatchResult: TDispatchResult) => Promise<TDispatchResult>;
   observeOnlyDispatchResult?: TDispatchResult;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;

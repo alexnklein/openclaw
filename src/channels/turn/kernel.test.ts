@@ -317,6 +317,7 @@ describe("channel turn kernel", () => {
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
     })) as DispatchReplyWithBufferedBlockDispatcher;
 
     const result = await dispatchAssembledChannelTurn({
@@ -874,6 +875,65 @@ describe("channel turn kernel", () => {
         reason: "zero-count-visible-dispatch",
       }),
     ]);
+  });
+
+  it("lets a prepared channel terminalize a zero-count visible dispatch", async () => {
+    const recordInboundSession = createRecordInboundSession();
+    const recoverZeroCountVisibleDispatch = vi.fn(async (dispatchResult) => ({
+      ...dispatchResult,
+      queuedFinal: true,
+      observedReplyDelivery: true,
+      counts: { tool: 0, block: 0, final: 1 },
+      zeroCountFallbackDelivered: true,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "telegram",
+      routeSessionKey: "agent:mesh-group:telegram:group:topic",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch: async () => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        noVisibleReplyFallbackEligible: true,
+      }),
+      recoverZeroCountVisibleDispatch,
+      messageId: "msg-recovered-zero",
+    });
+
+    expect(recoverZeroCountVisibleDispatch).toHaveBeenCalledTimes(1);
+    expect(result.dispatchResult).toMatchObject({
+      queuedFinal: true,
+      observedReplyDelivery: true,
+      counts: { final: 1 },
+      zeroCountFallbackDelivered: true,
+    });
+  });
+
+  it("preserves an intentional zero-count prepared dispatch", async () => {
+    const recordInboundSession = createRecordInboundSession();
+    const recoverZeroCountVisibleDispatch = vi.fn(async (dispatchResult) => dispatchResult);
+
+    const result = await runPreparedChannelTurn({
+      channel: "telegram",
+      routeSessionKey: "agent:mesh-group:telegram:group:topic",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch: async () => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      }),
+      recoverZeroCountVisibleDispatch,
+      messageId: "msg-intentional-silent",
+    });
+
+    expect(recoverZeroCountVisibleDispatch).not.toHaveBeenCalled();
+    expect(result.dispatchResult).toMatchObject({
+      queuedFinal: false,
+      counts: { final: 0 },
+    });
   });
 
   it("does not warn for observed-path deliveries with zero queued counts", async () => {

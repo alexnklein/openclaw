@@ -62,11 +62,11 @@ import {
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import {
   logMessageDispatchCompleted,
@@ -2121,9 +2121,13 @@ export async function dispatchReplyFromConfig(
     recordProcessed("completed", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     completeDispatchReplyOperation();
+    const counts = dispatcher.getQueuedCounts();
     return attachSourceReplyDeliveryMode({
       queuedFinal: false,
-      counts: dispatcher.getQueuedCounts(),
+      counts,
+      // An aborted admitted turn cannot be intentional model silence: no final
+      // outcome exists. Keep the channel kernel eligible to terminalize it.
+      ...(counts.final === 0 ? { noVisibleReplyFallbackEligible: true } : {}),
     });
   };
 

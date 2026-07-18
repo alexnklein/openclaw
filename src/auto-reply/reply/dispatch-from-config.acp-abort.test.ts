@@ -404,6 +404,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
     });
     expect(getActiveReplyRunCount()).toBe(0);
   });
@@ -474,6 +475,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
     });
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();

@@ -2924,6 +2924,33 @@ export const dispatchTelegramMessage = async ({
                 },
               });
             },
+            recoverZeroCountVisibleDispatch: async (dispatchResult) => {
+              if (isRoomEvent || isDispatchSuperseded()) {
+                return dispatchResult;
+              }
+              const delivered = await sendPayload(
+                {
+                  text: EMPTY_RESPONSE_FALLBACK,
+                  isError: true,
+                  isStatusNotice: true,
+                  channelData: { openclawFallbackReason: "zero-count-visible-dispatch" },
+                },
+                { durable: true },
+              );
+              if (!delivered) {
+                return dispatchResult;
+              }
+              return {
+                ...dispatchResult,
+                queuedFinal: true,
+                observedReplyDelivery: true,
+                counts: {
+                  ...dispatchResult.counts,
+                  final: (dispatchResult.counts?.final ?? 0) + 1,
+                },
+                zeroCountFallbackDelivered: true,
+              };
+            },
           }),
         },
       });
