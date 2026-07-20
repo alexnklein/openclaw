@@ -264,6 +264,7 @@ describe("spawnSubagentDirect seam flow", () => {
         agentAccountId: "acct-1",
         agentTo: "user-1",
         agentThreadId: 42,
+        parentFlowId: "flow-ingress-1",
         workspaceDir: "/tmp/requester-workspace",
       },
     );
@@ -283,6 +284,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(registerInput.childSessionKey).toBe(childSessionKey);
     expect(registerInput.requesterSessionKey).toBe("agent:main:main");
     expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
+    expect(registerInput.parentFlowId).toBe("flow-ingress-1");
     expect(requesterOrigin.channel).toBe("discord");
     expect(requesterOrigin.accountId).toBe("acct-1");
     expect(requesterOrigin.to).toBe("user-1");

@@ -66,7 +66,7 @@ describe("ingress-objective", () => {
 
   it("coalesces one active objective and admits one successor only from a safe wait", async () => {
     await withRegistryState(async () => {
-      const onDetached = vi.fn();
+      const onDetached = vi.fn(() => true);
       const first = beginIngressObjective({
         ctx: createContext("Finish the continuity repair"),
         sessionKey: "agent:main:telegram:topic-2",
@@ -121,10 +121,10 @@ describe("ingress-objective", () => {
     });
   });
 
-  it("detaches with a receipt and blocks replay across an in-flight tool", async () => {
+  it("waits for a safe tool checkpoint before transferring to a worker", async () => {
     vi.useFakeTimers();
     await withRegistryState(async () => {
-      const onDetached = vi.fn();
+      const onDetached = vi.fn(() => true);
       const objective = beginIngressObjective({
         ctx: createContext("Run the guarded action"),
         sessionKey: "agent:main:telegram:topic-2",
@@ -138,18 +138,66 @@ describe("ingress-objective", () => {
         return;
       }
 
+      objective.markToolStarted("external write");
       await vi.advanceTimersByTimeAsync(101);
+      expect(onDetached).not.toHaveBeenCalled();
+
+      objective.markToolCompleted("write receipt stored");
       expect(onDetached).toHaveBeenCalledWith({
         flowId: objective.flowId,
         taskId: objective.taskId,
       });
-      expect(getTaskById(objective.taskId)?.notifyPolicy).toBe("done_only");
+      expect(getTaskById(objective.taskId)?.notifyPolicy).toBe("silent");
+
+      expect(
+        objective.transferToWorker({
+          childSessionKey: "agent:main:subagent:worker",
+          runId: "worker-run",
+        }),
+      ).toBe(true);
+      expect(getTaskFlowById(objective.flowId)).toMatchObject({
+        status: "running",
+        currentStep: "worker_execution",
+      });
+      expect(getTaskById(objective.taskId)?.status).toBe("succeeded");
+    });
+  });
+
+  it("blocks successor replay when the inline owner fails during an in-flight tool", async () => {
+    await withRegistryState(async () => {
+      const onDetached = vi.fn(() => true);
+      const objective = beginIngressObjective({
+        ctx: createContext("Run the guarded action"),
+        sessionKey: "agent:main:telegram:topic-2",
+        agentId: "main",
+        runId: "run-tool",
+        onDetached,
+        detachAfterMs: 60_000,
+      });
+      expect(objective.kind).toBe("created");
+      if (objective.kind !== "created") {
+        return;
+      }
 
       objective.markToolStarted("external write");
       objective.fail(new Error("connection lost"));
       const blocked = getTaskFlowById(objective.flowId);
       expect(blocked?.status).toBe("blocked");
       expect(blocked?.currentStep).toBe("unsafe_checkpoint");
+
+      const retry = beginIngressObjective({
+        ctx: createContext("Run the guarded action", { MessageSid: "retry" }),
+        sessionKey: "agent:main:telegram:dm",
+        agentId: "main",
+        runId: "retry-run",
+        onDetached,
+        detachAfterMs: 60_000,
+      });
+      expect(retry).toMatchObject({
+        kind: "coalesced",
+        flowId: objective.flowId,
+        status: "blocked",
+      });
     });
   });
 });

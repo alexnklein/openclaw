@@ -19,6 +19,13 @@ export function isInternalFormattingArtifact(text: string | undefined): boolean 
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
 const silentLeadingAttachedRegexByToken = new Map<string, RegExp>();
+const EDGE_PROGRESS_SENTINEL_RE = /^(?:\s*\u2063)+|(?:\u2063\s*)+$/gu;
+
+function normalizeSilentReplyCandidate(text: string): string {
+  // U+2063 is a progress/liveness control. Ignore leaked edge markers only for
+  // token classification; normal reply payloads retain their original Unicode.
+  return text.replace(EDGE_PROGRESS_SENTINEL_RE, "");
+}
 
 function getSilentExactRegex(token: string): RegExp {
   const cached = silentExactRegexByToken.get(token);
@@ -54,13 +61,14 @@ export function isSilentReplyText(
   if (!text) {
     return false;
   }
+  const candidate = normalizeSilentReplyCandidate(text);
   // Match only token-only replies, including repeated tokens separated by whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
   // Models sometimes wrap the token in punctuation. Preserve exact custom-token matching,
   // but keep symbols such as emoji substantive so they are still delivered.
   return (
-    getSilentExactRegex(token).test(text) ||
-    getSilentExactRegex(token).test(stripEdgePunctuation(text.trim()))
+    getSilentExactRegex(token).test(candidate) ||
+    getSilentExactRegex(token).test(stripEdgePunctuation(candidate.trim()))
   );
 }
 

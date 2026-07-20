@@ -1476,14 +1476,18 @@ function resolveRestartLifecycleError(
 }
 
 function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
-  if (
-    replyOperation?.result?.kind === "aborted" &&
-    replyOperation.result.code === "aborted_by_user"
-  ) {
-    return true;
+  if (replyOperation?.result?.kind === "aborted") {
+    return replyOperation.result.code === "aborted_by_user";
   }
   const abortSignal = replyOperation?.abortSignal;
   return abortSignal?.aborted === true && !isAgentRunRestartAbortReason(abortSignal.reason);
+}
+
+function isReplyOperationHandoffAbort(replyOperation?: ReplyOperation): boolean {
+  return (
+    replyOperation?.result?.kind === "aborted" &&
+    replyOperation.result.code === "aborted_for_handoff"
+  );
 }
 
 function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
@@ -3065,7 +3069,10 @@ async function runAgentTurnWithFallbackInternal(
           ? restartAbortReason
           : createAgentRunRestartAbortError();
       }
-      if (isReplyOperationUserAbort(params.replyOperation)) {
+      if (
+        isReplyOperationUserAbort(params.replyOperation) ||
+        isReplyOperationHandoffAbort(params.replyOperation)
+      ) {
         settledLifecycleTerminal?.emit("end", runResult);
         await drainPendingToolTasks({
           tasks: params.pendingToolTasks,
@@ -3282,7 +3289,10 @@ async function runAgentTurnWithFallbackInternal(
         };
       }
 
-      if (isReplyOperationUserAbort(params.replyOperation)) {
+      if (
+        isReplyOperationUserAbort(params.replyOperation) ||
+        isReplyOperationHandoffAbort(params.replyOperation)
+      ) {
         takePendingLifecycleTerminal()?.emit("error", err);
         return {
           kind: "final",

@@ -463,6 +463,28 @@ describe("reply run registry", () => {
     operation.complete();
   });
 
+  it("records durable worker handoff without classifying it as user or restart abort", () => {
+    const cancel = vi.fn();
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:worker-handoff",
+      sessionId: "session-worker-handoff",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    operation.setPhase("running");
+
+    expect(operation.abortForHandoff?.()).toBe(true);
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_handoff" });
+    expect(operation.phase).toBe("aborted");
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(cancel).toHaveBeenCalledWith("superseded");
+    operation.complete();
+  });
+
   it("clears queued ownership when the upstream signal is already aborted", () => {
     const upstreamAbort = new AbortController();
     upstreamAbort.abort(new Error("caller already cancelled"));

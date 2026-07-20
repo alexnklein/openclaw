@@ -2530,6 +2530,12 @@ export async function runReplyAgent(params: {
     }
     if (
       replyOperation.result?.kind === "aborted" &&
+      replyOperation.result.code === "aborted_for_handoff"
+    ) {
+      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    }
+    if (
+      replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart"
     ) {
       if (isRestartRecoveryArmed()) {

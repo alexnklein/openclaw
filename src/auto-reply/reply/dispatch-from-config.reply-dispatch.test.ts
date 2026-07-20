@@ -22,6 +22,24 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
+const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
+type BeginIngressObjective =
+  typeof import("../../tasks/ingress-objective.js").beginIngressObjective;
+const ingressObjectiveMocks = vi.hoisted(() => ({
+  begin: vi.fn<BeginIngressObjective>(),
+  actual: undefined as BeginIngressObjective | undefined,
+}));
+
+vi.mock("../../agents/subagent-spawn.js", () => ({
+  spawnSubagentDirect: spawnSubagentDirectMock,
+}));
+vi.mock("../../tasks/ingress-objective.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../tasks/ingress-objective.js")>();
+  ingressObjectiveMocks.actual = actual.beginIngressObjective;
+  ingressObjectiveMocks.begin.mockImplementation(actual.beginIngressObjective);
+  return { ...actual, beginIngressObjective: ingressObjectiveMocks.begin };
+});
+
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
@@ -125,6 +143,85 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     runtimePluginMocks.ensureRuntimePluginsLoaded.mockReset();
     resetPluginTtsAndThreadMocks();
+    spawnSubagentDirectMock.mockReset();
+    ingressObjectiveMocks.begin.mockReset();
+    if (ingressObjectiveMocks.actual) {
+      ingressObjectiveMocks.begin.mockImplementation(ingressObjectiveMocks.actual);
+    }
+  });
+
+  it("transfers a long visible turn to one exact-origin supervised worker", async () => {
+    if (!ingressObjectiveMocks.actual) {
+      throw new Error("ingress objective test seam unavailable");
+    }
+    const actualBeginIngressObjective = ingressObjectiveMocks.actual;
+    ingressObjectiveMocks.begin.mockImplementation((params) =>
+      actualBeginIngressObjective({ ...params, detachAfterMs: 1 }),
+    );
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    spawnSubagentDirectMock.mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:test:subagent:durable-worker",
+      runId: "durable-worker-run",
+      mode: "run",
+    });
+    const dispatcher = createDispatcher();
+    const ctx = {
+      ...createHookCtx(),
+      SenderId: "telegram-user-1",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:chat-1",
+      CommandTurn: undefined,
+    };
+    let markResolverStarted: () => void = () => {};
+    const resolverStarted = new Promise<void>((resolve) => {
+      markResolverStarted = resolve;
+    });
+    const dispatch = dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
+      replyResolver: async (_ctx, options) => {
+        markResolverStarted();
+        await new Promise<void>((resolve) => {
+          options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { text: "NO_REPLY" };
+      },
+    });
+
+    try {
+      await resolverStarted;
+      const result = await dispatch;
+
+      expect(ingressObjectiveMocks.begin).toHaveBeenCalledOnce();
+      expect(spawnSubagentDirectMock).toHaveBeenCalledOnce();
+      const [workerParams, workerContext] = spawnSubagentDirectMock.mock.calls[0] ?? [];
+      expect(workerParams).toMatchObject({
+        agentId: "test",
+        mode: "run",
+        context: "fork",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      });
+      expect(workerContext).toMatchObject({
+        agentSessionKey: "agent:test:session",
+        completionOwnerKey: "agent:test:session",
+        agentChannel: ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
+        agentTo: ctx.OriginatingTo ?? ctx.To ?? ctx.From,
+      });
+      expect(workerContext.parentFlowId).toEqual(expect.any(String));
+      expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("Supervised worker agent:test:subagent:durable-worker"),
+          isStatusNotice: true,
+        }),
+      );
+      expect(result.queuedFinal).toBe(false);
+    } finally {
+      ingressObjectiveMocks.begin.mockImplementation(actualBeginIngressObjective);
+    }
   });
 
   it("returns handled dispatch results from plugins", async () => {

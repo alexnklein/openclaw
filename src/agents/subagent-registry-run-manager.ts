@@ -149,6 +149,7 @@ export type RegisterSubagentRunParams = {
   taskName?: string;
   agentId?: string;
   requesterAgentId?: string;
+  parentFlowId?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -710,6 +711,7 @@ export function createSubagentRunManager(params: {
         task: registerParams.task,
         agentId: registerParams.agentId,
         requesterAgentId: registerParams.requesterAgentId,
+        parentFlowId: registerParams.parentFlowId,
         deliveryStatus:
           registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
         startedAt: now,

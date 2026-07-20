@@ -297,6 +297,9 @@ const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
   () => import("./get-reply-from-config.runtime.js"),
 );
 const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
+const ingressWorkerRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/subagent-spawn.js"),
+);
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
@@ -315,6 +318,10 @@ function loadGetReplyFromConfigRuntime() {
 
 function loadAbortRuntime() {
   return abortRuntimeLoader.load();
+}
+
+function loadIngressWorkerRuntime() {
+  return ingressWorkerRuntimeLoader.load();
 }
 
 function loadTtsRuntime() {
@@ -2140,6 +2147,113 @@ export async function dispatchReplyFromConfig(
   };
 
   let ingressObjective: IngressObjectiveHandle | undefined;
+  let ingressOwnerSessionKey: string | undefined;
+  let ingressHandoffRequested = false;
+  const finishIngressHandoffDispatch = async (): Promise<DispatchFromConfigResult> => {
+    const objective = ingressObjective;
+    if (!objective || !ingressOwnerSessionKey) {
+      return finishReplyOperationAbortedDispatch();
+    }
+    completeDispatchReplyOperation();
+    const failHandoff = (reason: string) => {
+      objective.fail(new Error(reason));
+      markInboundDedupeReplayUnsafe();
+      dispatcher.sendToolResult({
+        text: `blocked: ${reason}. Durable task ${objective.flowId} is waiting at a safe checkpoint; no worker is running.`,
+        isError: true,
+        isStatusNotice: true,
+      });
+      commitInboundDedupeIfClaimed();
+      recordAgentDispatchCompleted("error", { error: reason });
+      recordProcessed("error", { error: reason });
+      markIdle("message_error");
+      return attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+      });
+    };
+    if (!objective.isHandoffSafe()) {
+      return failHandoff("worker handoff reached an unsafe in-flight tool checkpoint");
+    }
+    let workerResult: Awaited<
+      ReturnType<(typeof import("../../agents/subagent-spawn.js"))["spawnSubagentDirect"]>
+    >;
+    try {
+      const runtime = await loadIngressWorkerRuntime();
+      workerResult = await runtime.spawnSubagentDirect(
+        {
+          task: [
+            "Continue the exact operator objective from the forked parent transcript:",
+            "",
+            objective.task,
+            "",
+            "The parent transferred ownership at a tool-safe checkpoint. Inspect the transcript before acting, do not repeat completed external effects, continue from the latest recorded result, and return one terminal result or exact blocker.",
+          ].join("\n"),
+          agentId: sessionAgentId,
+          label: `Durable continuation ${objective.flowId.slice(0, 8)}`,
+          mode: "run",
+          context: "fork",
+          cleanup: "keep",
+          expectsCompletionMessage: true,
+        },
+        {
+          agentSessionKey: ingressOwnerSessionKey,
+          completionOwnerKey: ingressOwnerSessionKey,
+          parentFlowId: objective.flowId,
+          agentChannel: ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
+          agentAccountId: ctx.AccountId,
+          agentTo: ctx.OriginatingTo ?? ctx.To ?? ctx.From,
+          agentThreadId: ctx.MessageThreadId,
+          inheritedToolAllowlist: params.replyOptions?.toolsAllow,
+        },
+      );
+    } catch (error) {
+      return failHandoff(`supervised worker launch failed: ${formatErrorMessage(error)}`);
+    }
+    if (
+      workerResult.status !== "accepted" ||
+      !workerResult.childSessionKey?.trim() ||
+      !workerResult.runId?.trim()
+    ) {
+      return failHandoff(
+        `supervised worker launch failed: ${workerResult.error ?? "missing launch receipt"}`,
+      );
+    }
+    if (
+      !objective.transferToWorker({
+        childSessionKey: workerResult.childSessionKey,
+        runId: workerResult.runId,
+      })
+    ) {
+      markInboundDedupeReplayUnsafe();
+      dispatcher.sendToolResult({
+        text: `Supervised worker ${workerResult.childSessionKey} is running under task ${objective.flowId}, but its flow metadata annotation failed. Completion delivery remains registered here.`,
+        isError: true,
+        isStatusNotice: true,
+      });
+      commitInboundDedupeIfClaimed();
+      recordAgentDispatchCompleted("error", { error: "ingress worker metadata annotation failed" });
+      recordProcessed("error", { error: "ingress worker metadata annotation failed" });
+      markIdle("message_error");
+      return attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+      });
+    }
+    markInboundDedupeReplayUnsafe();
+    dispatcher.sendToolResult({
+      text: `Still working as durable task ${objective.flowId}. Supervised worker ${workerResult.childSessionKey} now owns it; completion will return here.`,
+      isStatusNotice: true,
+    });
+    commitInboundDedupeIfClaimed();
+    recordAgentDispatchCompleted("completed");
+    recordProcessed("completed", { reason: "ingress_worker_handoff" });
+    markIdle("message_completed");
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  };
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
     | "plugin-bound-fallback-no-handler"
@@ -2734,23 +2848,23 @@ export async function dispatchReplyFromConfig(
       params.replyOptions?.isHeartbeat !== true &&
       !ctx.CommandTurn &&
       ctx.InboundEventKind !== "room_event" &&
+      !suppressAutomaticSourceDelivery &&
+      !sendPolicyDenied &&
       Boolean(ingressSessionKey) &&
       Boolean(ingressIdentity);
     if (shouldOwnIngressObjective && ingressSessionKey) {
+      ingressOwnerSessionKey = ingressSessionKey;
       const ingress = beginIngressObjective({
         ctx,
         sessionKey: ingressSessionKey,
         agentId: sessionAgentId,
         runId: turnRunId,
-        onDetached: ({ flowId }) => {
-          if (suppressAutomaticSourceDelivery || sendPolicyDenied) {
-            return;
+        onDetached: () => {
+          const accepted = dispatchReplyOperation?.abortForHandoff?.() === true;
+          if (accepted) {
+            ingressHandoffRequested = true;
           }
-          markInboundDedupeReplayUnsafe();
-          dispatcher.sendToolResult({
-            text: `Still working under durable task ${flowId}. This turn is now receipt-backed; completion will return here.`,
-            isStatusNotice: true,
-          });
+          return accepted;
         },
       });
       if (ingress.kind === "unavailable") {
@@ -3767,6 +3881,9 @@ export async function dispatchReplyFromConfig(
     });
   } catch (err) {
     if (isDispatchReplyOperationAbortedError(err)) {
+      if (ingressHandoffRequested) {
+        return await finishIngressHandoffDispatch();
+      }
       return finishReplyOperationAbortedDispatch();
     }
     ingressObjective?.fail(err);

@@ -91,6 +91,17 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("  no_reply \t No_RePlY  ")).toBe(true);
   });
 
+  it("returns true when edge progress sentinels leak around an exact token", () => {
+    expect(isSilentReplyText("\u2063\u2063\u2063NO_REPLY")).toBe(true);
+    expect(isSilentReplyText(" \u2063 \u2063 NO_REPLY \u2063 ")).toBe(true);
+  });
+
+  it("does not treat progress sentinels inside or beside substantive text as silent", () => {
+    expect(isSilentReplyText("NO\u2063_REPLY")).toBe(false);
+    expect(isSilentReplyText("\u2063Visible Unicode reply")).toBe(false);
+    expect(isSilentReplyText("Visible Unicode reply\u2063")).toBe(false);
+  });
+
   it("returns false for undefined/empty", () => {
     expect(isSilentReplyText(undefined)).toBe(false);
     expect(isSilentReplyText("")).toBe(false);

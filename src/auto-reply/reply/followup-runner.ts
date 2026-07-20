@@ -1320,7 +1320,8 @@ export function createFollowupRunner(params: {
         }
         if (
           replyOperation.result?.kind === "aborted" &&
-          replyOperation.result.code === "aborted_by_user"
+          (replyOperation.result.code === "aborted_by_user" ||
+            replyOperation.result.code === "aborted_for_handoff")
         ) {
           settledLifecycleTerminal?.emit("end", runResult);
           await drainProgressDeliveries();
@@ -1381,7 +1382,8 @@ export function createFollowupRunner(params: {
       } catch (err) {
         if (
           replyOperation.result?.kind === "aborted" &&
-          replyOperation.result.code === "aborted_by_user"
+          (replyOperation.result.code === "aborted_by_user" ||
+            replyOperation.result.code === "aborted_for_handoff")
         ) {
           pendingLifecycleTerminal?.backstop.emit("error", err);
           pendingLifecycleTerminal = undefined;

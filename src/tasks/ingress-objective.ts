@@ -24,7 +24,14 @@ const TERMINAL_STATUSES = new Set<TaskFlowRecord["status"]>([
 
 type IngressCheckpoint = {
   safe: boolean;
-  phase: "accepted" | "tool_inflight" | "after_tool" | "waiting_successor" | "terminal";
+  phase:
+    | "accepted"
+    | "tool_inflight"
+    | "after_tool"
+    | "handoff_requested"
+    | "worker_running"
+    | "waiting_successor"
+    | "terminal";
   summary?: string;
   updatedAt: number;
 };
@@ -40,6 +47,8 @@ type IngressObjectiveState = {
   checkpoint: IngressCheckpoint;
   detachedAt?: number;
   retrySeenAt?: number;
+  workerSessionKey?: string;
+  workerRunId?: string;
 };
 
 export type IngressObjectiveHandle = {
@@ -47,9 +56,12 @@ export type IngressObjectiveHandle = {
   flowId: string;
   taskId: string;
   runId: string;
+  task: string;
   isDetached: () => boolean;
+  isHandoffSafe: () => boolean;
   markToolStarted: (summary?: string) => void;
   markToolCompleted: (summary?: string) => void;
+  transferToWorker: (worker: { childSessionKey: string; runId: string }) => boolean;
   complete: (summary?: string) => void;
   fail: (error: unknown) => void;
   cancel: (summary?: string) => void;
@@ -66,7 +78,7 @@ type BeginIngressObjectiveParams = {
   sessionKey: string;
   agentId: string;
   runId?: string;
-  onDetached: (receipt: { flowId: string; taskId: string }) => void | Promise<void>;
+  onDetached: (receipt: { flowId: string; taskId: string }) => boolean;
   detachAfterMs?: number;
 };
 
@@ -312,21 +324,45 @@ function createObjective(
   }));
 
   let detached = false;
+  let detachDue = false;
   let disposed = false;
   const detachAfterMs = Math.max(1, params.detachAfterMs ?? INGRESS_OBJECTIVE_DETACH_MS);
-  const timer = setTimeout(() => {
-    if (disposed) {
+  const requestHandoffIfSafe = () => {
+    if (disposed || detached || !detachDue) {
+      return;
+    }
+    const current = getTaskFlowById(flow.flowId);
+    const currentState = current ? readIngressState(current) : null;
+    if (currentState?.checkpoint.safe !== true) {
+      return;
+    }
+    let accepted = false;
+    try {
+      accepted = params.onDetached({ flowId: flow.flowId, taskId: task.taskId });
+    } catch {
+      accepted = false;
+    }
+    if (!accepted) {
+      detachDue = false;
       return;
     }
     detached = true;
-    updateTaskNotifyPolicyById({ taskId: task.taskId, notifyPolicy: "done_only" });
     updateFlow(flow.flowId, (_current, state) => ({
-      currentStep: "detached_execution",
-      state: { ...state, detachedAt: Date.now() },
+      currentStep: "handoff_requested",
+      state: {
+        ...state,
+        detachedAt: Date.now(),
+        checkpoint: {
+          ...state.checkpoint,
+          phase: "handoff_requested",
+          updatedAt: Date.now(),
+        },
+      },
     }));
-    void Promise.resolve(params.onDetached({ flowId: flow.flowId, taskId: task.taskId })).catch(
-      () => undefined,
-    );
+  };
+  const timer = setTimeout(() => {
+    detachDue = true;
+    requestHandoffIfSafe();
   }, detachAfterMs);
   timer.unref?.();
 
@@ -346,7 +382,12 @@ function createObjective(
     flowId: flow.flowId,
     taskId: task.taskId,
     runId,
+    task: taskText,
     isDetached: () => detached,
+    isHandoffSafe: () => {
+      const current = getTaskFlowById(flow.flowId);
+      return Boolean(current && readIngressState(current)?.checkpoint.safe === true);
+    },
     markToolStarted: (summary) =>
       updateCheckpoint({
         safe: false,
@@ -354,13 +395,49 @@ function createObjective(
         ...(normalizeOptionalString(summary) ? { summary: normalizeOptionalString(summary) } : {}),
         updatedAt: Date.now(),
       }),
-    markToolCompleted: (summary) =>
+    markToolCompleted: (summary) => {
       updateCheckpoint({
         safe: true,
         phase: "after_tool",
         ...(normalizeOptionalString(summary) ? { summary: normalizeOptionalString(summary) } : {}),
         updatedAt: Date.now(),
-      }),
+      });
+      requestHandoffIfSafe();
+    },
+    transferToWorker: ({ childSessionKey, runId: workerRunId }) => {
+      const current = getTaskFlowById(flow.flowId);
+      const state = current ? readIngressState(current) : null;
+      if (!detached || state?.checkpoint.safe !== true) {
+        return false;
+      }
+      dispose();
+      updateTaskNotifyPolicyById({ taskId: task.taskId, notifyPolicy: "silent" });
+      finalizeTaskRunByRunId({
+        runId,
+        runtime: "cli",
+        status: "succeeded",
+        endedAt: Date.now(),
+        terminalSummary: `transferred to ${childSessionKey}`,
+      });
+      return Boolean(
+        updateFlow(flow.flowId, (_current, nextState) => ({
+          status: "running",
+          currentStep: "worker_execution",
+          endedAt: null,
+          state: {
+            ...nextState,
+            workerSessionKey: childSessionKey,
+            workerRunId,
+            checkpoint: {
+              safe: false,
+              phase: "worker_running",
+              summary: "supervised worker owns continuation",
+              updatedAt: Date.now(),
+            },
+          },
+        })),
+      );
+    },
     complete: (summary) => {
       dispose();
       updateTaskNotifyPolicyById({ taskId: task.taskId, notifyPolicy: "silent" });
@@ -455,10 +532,24 @@ export function beginIngressObjective(
     return { kind: "unavailable", reason: "missing stable sender or request content" };
   }
   const existing = findMatchingFlow(identity.identity);
+  const existingState = existing ? readIngressState(existing) : null;
+  if (
+    existing &&
+    TERMINAL_STATUSES.has(existing.status) &&
+    existing.status !== "succeeded" &&
+    existing.status !== "cancelled" &&
+    existingState?.checkpoint.safe === false
+  ) {
+    return { kind: "coalesced", flowId: existing.flowId, status: existing.status };
+  }
   if (existing && !TERMINAL_STATUSES.has(existing.status)) {
-    const state = readIngressState(existing);
-    if (existing.status === "waiting" && state?.checkpoint.safe === true) {
-      return createObjective({ ...params, ...identity, prior: existing, priorState: state });
+    if (existing.status === "waiting" && existingState?.checkpoint.safe === true) {
+      return createObjective({
+        ...params,
+        ...identity,
+        prior: existing,
+        priorState: existingState,
+      });
     }
     updateFlow(existing.flowId, (_current, currentState) => ({
       state: { ...currentState, retrySeenAt: Date.now() },

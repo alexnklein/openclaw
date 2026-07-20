@@ -237,6 +237,22 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses exact NO_REPLY payloads prefixed by leaked progress sentinels", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: "\u2063\u2063\u2063NO_REPLY" },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("preserves progress sentinels and other Unicode in substantive replies", () => {
+    const text = "\u2063Visible café reply 🫶\u2063";
+    const result = normalizeReplyPayload({ text });
+    expect(expectNormalizedReply(result).text).toBe(text);
+  });
+
   it("suppresses JSON NO_REPLY action payloads", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(

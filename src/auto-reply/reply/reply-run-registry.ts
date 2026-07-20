@@ -1,10 +1,10 @@
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createAbortError } from "../../infra/abort-signal.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -49,7 +49,10 @@ export type ReplyOperationFailureCode =
   | "session_corruption_reset"
   | "run_failed";
 
-export type ReplyOperationAbortCode = "aborted_by_user" | "aborted_for_restart";
+export type ReplyOperationAbortCode =
+  | "aborted_by_user"
+  | "aborted_for_restart"
+  | "aborted_for_handoff";
 
 export type ReplyOperationResult =
   | { kind: "completed" }
@@ -101,6 +104,8 @@ export type ReplyOperation = {
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): boolean;
   abortForRestart(): boolean;
+  /** Stop the inline backend after durable ownership has accepted a safe transfer. */
+  abortForHandoff?: () => boolean;
 };
 
 export type ReplyRunRegistry = {
@@ -564,7 +569,9 @@ export function createReplyOperation(params: {
           result.kind === "aborted"
             ? result.code === "aborted_for_restart"
               ? "restart"
-              : "user_abort"
+              : result.code === "aborted_for_handoff"
+                ? "superseded"
+                : "user_abort"
             : "superseded",
         );
         return;
@@ -635,6 +642,19 @@ export function createReplyOperation(params: {
       const phaseBeforeAbort = phase;
       abortWithReason("restart", createAgentRunRestartAbortError(), {
         abortedCode: "aborted_for_restart",
+      });
+      if (phaseBeforeAbort === "queued") {
+        clearState();
+      }
+      return true;
+    },
+    abortForHandoff() {
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
+      const phaseBeforeAbort = phase;
+      abortWithReason("superseded", createAbortError("Reply operation transferred to worker"), {
+        abortedCode: "aborted_for_handoff",
       });
       if (phaseBeforeAbort === "queued") {
         clearState();
