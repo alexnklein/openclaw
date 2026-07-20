@@ -2846,7 +2846,7 @@ export async function dispatchReplyFromConfig(
     const shouldOwnIngressObjective =
       resolveReplyTurnKind(params.replyOptions) === "visible" &&
       params.replyOptions?.isHeartbeat !== true &&
-      !ctx.CommandTurn &&
+      resolveCommandTurnContext(ctx).kind === "normal" &&
       ctx.InboundEventKind !== "room_event" &&
       !suppressAutomaticSourceDelivery &&
       !sendPolicyDenied &&

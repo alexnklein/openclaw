@@ -171,7 +171,15 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       SenderId: "telegram-user-1",
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:chat-1",
-      CommandTurn: undefined,
+      // Production inbound normalization always supplies this object for
+      // ordinary messages. A truthiness check here would silently disable
+      // durable ingress ownership on every real channel turn.
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false as const,
+        body: "hello",
+      },
     };
     let markResolverStarted: () => void = () => {};
     const resolverStarted = new Promise<void>((resolve) => {
