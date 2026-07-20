@@ -8,6 +8,7 @@ import {
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedIsFailoverAssistantError,
@@ -699,6 +700,97 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
     expectWarnMessageWith("reasoning-only assistant turn detected");
+  });
+
+  it("continues once when a normal stop contains only a progress promise", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedBuildEmbeddedRunPayloads.mockImplementation((params: { assistantTexts: string[] }) =>
+      params.assistantTexts.map((text) => ({ text })),
+    );
+    const progressOnly =
+      "I’m implementing the continuity fixes now. I’ll keep MTL paused and treat each repair as a separately verified gate.";
+    const progressAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: progressOnly }],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [progressOnly],
+        lastAssistant: progressAssistant,
+        currentAttemptAssistant: progressAssistant,
+      }),
+    );
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Continuity guard deployed and verified. done" }],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Continuity guard deployed and verified. done"],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-progress-only-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).prompt).toContain(
+      "previous assistant turn ended with a progress promise",
+    );
+    expect(result.payloads).toEqual([{ text: "Continuity guard deployed and verified. done" }]);
+    expectWarnMessageWith("progress-only assistant completion detected");
+  });
+
+  it("surfaces an explicit terminal stall after the bounded progress-only retry is exhausted", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedBuildEmbeddedRunPayloads.mockImplementation((params: { assistantTexts: string[] }) =>
+      params.assistantTexts.map((text) => ({ text })),
+    );
+    const progressOnly =
+      "I’m implementing the continuity fixes now. I’ll keep MTL paused and treat each repair as a separately verified gate.";
+    const progressAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: progressOnly }],
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [progressOnly],
+        lastAssistant: progressAssistant,
+        currentAttemptAssistant: progressAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-progress-only-exhausted",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toEqual([
+      {
+        text: "⚠️ Agent stopped after a progress update without producing a terminal result. No further work is running for this turn.",
+        isError: true,
+      },
+    ]);
+    expectWarnMessageWith("progress-only assistant completion detected");
+    expectWarnMessageWith("incomplete turn detected");
   });
 
   it("returns NO_REPLY without retrying reasoning-only assistant turns when silence is allowed", async () => {

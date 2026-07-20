@@ -16,6 +16,7 @@ import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
+  hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
   type ChannelTurnDispatchResultLike,
@@ -340,7 +341,7 @@ function shouldDeliverZeroCountVisibleDispatchFallback<TDispatchResult>(
     return false;
   }
   const result = dispatchResult as ChannelTurnDispatchResultLike;
-  return result?.noVisibleReplyFallbackEligible === true && !hasVisibleChannelTurnDispatch(result);
+  return result?.noVisibleReplyFallbackEligible === true && !hasFinalChannelTurnDispatch(result);
 }
 
 function markChannelDeliveryErrorVisible(error: unknown): unknown {

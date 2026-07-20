@@ -38,6 +38,7 @@ import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js"
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
+import { endsWithProgressOnlyCompletionText } from "../../tasks/task-completion-contract.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -259,12 +260,15 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+const MAX_PROGRESS_ONLY_COMPLETION_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
+const PROGRESS_ONLY_COMPLETION_RETRY_INSTRUCTION =
+  "The previous assistant turn ended with a progress promise instead of a terminal result. Continue from the current transcript now. Do not repeat completed work or rerun completed tools. Use the available tools for any remaining work, then produce either the requested final result or one exact blocker.";
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
@@ -1608,6 +1612,7 @@ async function runEmbeddedAgentInternal(
       let consecutiveSameModelRateLimitRetries = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let progressOnlyCompletionRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let beforeAgentFinalizeRevisionAttempts = 0;
       let semanticActionRefreshAttempts = 0;
@@ -3836,6 +3841,17 @@ async function runEmbeddedAgentInternal(
                 ? [silentToolResultReplyPayload]
                 : payloadsWithToolMedia;
           const payloadCount = payloadsForTerminalPath?.length ?? 0;
+          const progressOnlyCompletion =
+            !aborted &&
+            !timedOut &&
+            !attempt.yieldDetected &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !hasMessagingToolDeliveryEvidence(attempt) &&
+            (attempt.acceptedSessionSpawns?.length ?? 0) === 0 &&
+            ["end_turn", "stop"].includes(
+              (sessionLastAssistant?.stopReason ?? "").trim().toLowerCase(),
+            ) &&
+            endsWithProgressOnlyCompletionText(finalAssistantVisibleText);
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
             payloadCount,
@@ -3843,6 +3859,23 @@ async function runEmbeddedAgentInternal(
             timedOut,
             attempt,
           });
+          if (
+            progressOnlyCompletion &&
+            progressOnlyCompletionRetryAttempts < MAX_PROGRESS_ONLY_COMPLETION_RETRIES
+          ) {
+            progressOnlyCompletionRetryAttempts += 1;
+            nextAttemptPromptOverride = PROGRESS_ONLY_COMPLETION_RETRY_INSTRUCTION;
+            suppressNextUserMessagePersistence = true;
+            reasoningOnlyRetryInstruction = null;
+            emptyResponseRetryInstruction = null;
+            compactionContinuationRetryInstruction = null;
+            log.warn(
+              `progress-only assistant completion detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — ` +
+                `retrying ${progressOnlyCompletionRetryAttempts}/${MAX_PROGRESS_ONLY_COMPLETION_RETRIES} from current transcript`,
+            );
+            continue;
+          }
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveReasoningOnlyRetryInstruction({
@@ -3916,13 +3949,15 @@ async function runEmbeddedAgentInternal(
           }
           const incompleteTurnText = emptyAssistantReplyIsSilent
             ? null
-            : resolveIncompleteTurnPayloadText({
-                payloadCount,
-                aborted,
-                externalAbort,
-                timedOut,
-                attempt,
-              });
+            : progressOnlyCompletion
+              ? "⚠️ Agent stopped after a progress update without producing a terminal result. No further work is running for this turn."
+              : resolveIncompleteTurnPayloadText({
+                  payloadCount,
+                  aborted,
+                  externalAbort,
+                  timedOut,
+                  attempt,
+                });
           const incompleteTurnFallbackSafe = Boolean(
             incompleteTurnText &&
             !aborted &&

@@ -911,6 +911,40 @@ describe("channel turn kernel", () => {
     });
   });
 
+  it("lets a prepared channel terminalize an eligible progress-only dispatch", async () => {
+    const recordInboundSession = createRecordInboundSession();
+    const recoverZeroCountVisibleDispatch = vi.fn(async (dispatchResult) => ({
+      ...dispatchResult,
+      queuedFinal: true,
+      observedReplyDelivery: true,
+      counts: { tool: 1, block: 1, final: 1 },
+      zeroCountFallbackDelivered: true,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "telegram",
+      routeSessionKey: "agent:mesh-group:telegram:group:topic",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch: async () => ({
+        queuedFinal: false,
+        counts: { tool: 1, block: 1, final: 0 },
+        noVisibleReplyFallbackEligible: true,
+      }),
+      recoverZeroCountVisibleDispatch,
+      messageId: "msg-progress-without-final",
+    });
+
+    expect(recoverZeroCountVisibleDispatch).toHaveBeenCalledTimes(1);
+    expect(result.dispatchResult).toMatchObject({
+      queuedFinal: true,
+      observedReplyDelivery: true,
+      counts: { tool: 1, block: 1, final: 1 },
+      zeroCountFallbackDelivered: true,
+    });
+  });
+
   it("preserves an intentional zero-count prepared dispatch", async () => {
     const recordInboundSession = createRecordInboundSession();
     const recoverZeroCountVisibleDispatch = vi.fn(async (dispatchResult) => dispatchResult);
