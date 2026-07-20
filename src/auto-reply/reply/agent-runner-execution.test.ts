@@ -3205,6 +3205,9 @@ describe("runAgentTurnWithFallback", () => {
     );
 
     const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
+    const onToolStartObserved = vi.fn<NonNullable<GetReplyOptions["onToolStartObserved"]>>(
+      async () => undefined,
+    );
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -3214,7 +3217,7 @@ describe("runAgentTurnWithFallback", () => {
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
-      opts: { onToolStart },
+      opts: { onToolStart, onToolStartObserved },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -3234,10 +3237,12 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(onToolStart).toHaveBeenCalledTimes(1);
+    expect(onToolStartObserved).toHaveBeenCalledTimes(1);
     const call = onToolStart.mock.calls[0]?.[0];
     expect(call?.name).toBe("Bash");
     expect(call?.phase).toBe("start");
     expect(call?.args).toEqual({ command: "ls -la" });
+    expect(onToolStartObserved).toHaveBeenCalledWith(call);
   });
 
   it("bridges CLI commentary agent events into onItemEvent for live preview", async () => {

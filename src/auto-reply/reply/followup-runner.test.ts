@@ -1484,6 +1484,7 @@ describe("createFollowupRunner runtime config", () => {
       },
     };
     const onToolStart = vi.fn(async () => {});
+    const onToolStartObserved = vi.fn(async () => {});
     runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
@@ -1502,7 +1503,7 @@ describe("createFollowupRunner runtime config", () => {
     });
 
     const runner = createFollowupRunner({
-      opts: { onToolStart },
+      opts: { onToolStart, onToolStartObserved },
       typing: createMockTypingController(),
       typingMode: "instant",
       defaultModel: "anthropic/claude-opus-4-7",
@@ -1523,6 +1524,9 @@ describe("createFollowupRunner runtime config", () => {
     );
 
     expect(onToolStart).not.toHaveBeenCalled();
+    expect(onToolStartObserved).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "web_search", phase: "start" }),
+    );
   });
 
   it("bridges queued CLI inter-tool commentary into onItemEvent for live preview", async () => {

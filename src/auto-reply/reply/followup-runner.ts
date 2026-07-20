@@ -163,7 +163,14 @@ async function forwardFollowupProgressEvent(params: {
   const emitChannelProgress = params.emitChannelProgress !== false;
   const allowQuietToolLifecycle =
     evt.stream === "tool" && opts?.allowToolLifecycleWhenProgressHidden === true;
-  if (!emitChannelProgress && evt.stream !== "compaction" && !allowQuietToolLifecycle) {
+  const observeInternalToolLifecycle =
+    evt.stream === "tool" && typeof opts?.onToolStartObserved === "function";
+  if (
+    !emitChannelProgress &&
+    evt.stream !== "compaction" &&
+    !allowQuietToolLifecycle &&
+    !observeInternalToolLifecycle
+  ) {
     return;
   }
 
@@ -171,7 +178,7 @@ async function forwardFollowupProgressEvent(params: {
     const phase = readStringValue(evt.data.phase) ?? "";
     const name = readStringValue(evt.data.name);
     if (phase === "start" || phase === "update") {
-      await opts?.onToolStart?.({
+      const toolStartPayload = {
         itemId: readStringValue(evt.data.itemId),
         toolCallId: readStringValue(evt.data.toolCallId),
         name,
@@ -181,7 +188,13 @@ async function forwardFollowupProgressEvent(params: {
             ? (evt.data.args as Record<string, unknown>)
             : undefined,
         detailMode: params.detailMode,
-      });
+      };
+      await Promise.all([
+        emitChannelProgress || allowQuietToolLifecycle
+          ? opts?.onToolStart?.(toolStartPayload)
+          : undefined,
+        opts?.onToolStartObserved?.(toolStartPayload),
+      ]);
     }
     const commandOutput = buildCommandOutputFromToolResultEvent(evt);
     if (commandOutput) {

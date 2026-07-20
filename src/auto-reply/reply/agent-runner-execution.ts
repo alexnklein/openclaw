@@ -2380,14 +2380,16 @@ async function runAgentTurnWithFallbackInternal(
                       return;
                     }
                     const { name, phase, args } = payload;
+                    const toolStartPayload = {
+                      name,
+                      phase,
+                      args,
+                      detailMode: params.toolProgressDetail,
+                    };
                     await Promise.all([
                       params.typingSignals.signalToolStart(),
-                      params.opts?.onToolStart?.({
-                        name,
-                        phase,
-                        args,
-                        detailMode: params.toolProgressDetail,
-                      }),
+                      params.opts?.onToolStart?.(toolStartPayload),
+                      params.opts?.onToolStartObserved?.(toolStartPayload),
                     ]);
                   },
                   onCommentaryText:
@@ -2719,17 +2721,18 @@ async function runAgentTurnWithFallbackInternal(
                             return;
                           }
                           if (phase === "start" || phase === "update") {
-                            const toolStartProgressPromise = params.opts?.onToolStart?.({
+                            const toolStartPayload = {
                               itemId: readStringValue(evt.data.itemId),
                               toolCallId: readStringValue(evt.data.toolCallId),
                               name,
                               phase,
                               args,
                               detailMode: params.toolProgressDetail,
-                            });
+                            };
                             await Promise.all([
                               params.typingSignals.signalToolStart(),
-                              toolStartProgressPromise,
+                              params.opts?.onToolStart?.(toolStartPayload),
+                              params.opts?.onToolStartObserved?.(toolStartPayload),
                             ]);
                           }
                           const commandOutput = buildCommandOutputFromToolResultEvent(evt);

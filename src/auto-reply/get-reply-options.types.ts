@@ -36,6 +36,15 @@ export type ReplyThreadingPolicy = {
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+export type ToolStartPayload = {
+  itemId?: string;
+  toolCallId?: string;
+  name?: string;
+  phase?: string;
+  args?: Record<string, unknown>;
+  detailMode?: "explain" | "raw";
+};
+
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
   begin: () => (() => void) | void;
@@ -138,14 +147,9 @@ export type GetReplyOptions = {
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
-  onToolStart?: (payload: {
-    itemId?: string;
-    toolCallId?: string;
-    name?: string;
-    phase?: string;
-    args?: Record<string, unknown>;
-    detailMode?: "explain" | "raw";
-  }) => Promise<void> | void;
+  onToolStart?: (payload: ToolStartPayload) => Promise<void> | void;
+  /** Internal lifecycle observer; unlike onToolStart, this does not enable channel progress. */
+  onToolStartObserved?: (payload: ToolStartPayload) => Promise<void> | void;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;

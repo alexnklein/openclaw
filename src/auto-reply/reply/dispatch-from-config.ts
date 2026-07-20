@@ -96,6 +96,11 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
+import {
+  beginIngressObjective,
+  buildIngressObjectiveIdentity,
+  type IngressObjectiveHandle,
+} from "../../tasks/ingress-objective.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
@@ -1095,6 +1100,7 @@ export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
+  const turnRunId = params.replyOptions?.runId?.trim() || crypto.randomUUID();
   if (params.replyOptions?.abortSignal?.aborted) {
     return {
       queuedFinal: false,
@@ -1569,10 +1575,11 @@ export async function dispatchReplyFromConfig(
   const getReplyOptions = () => {
     const abortSignal = getDispatchAbortSignal();
     if (!abortSignal) {
-      return params.replyOptions;
+      return { ...params.replyOptions, runId: turnRunId };
     }
     return {
       ...params.replyOptions,
+      runId: turnRunId,
       abortSignal,
       queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
@@ -1827,7 +1834,7 @@ export async function dispatchReplyFromConfig(
       isGroup,
       groupId,
       replyKind: options?.kind ?? "final",
-      runId: params.replyOptions?.runId,
+      runId: turnRunId,
     });
   };
 
@@ -2117,6 +2124,7 @@ export async function dispatchReplyFromConfig(
     });
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
+    ingressObjective?.cancel("source turn aborted");
     commitInboundDedupeIfClaimed();
     recordProcessed("completed", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
@@ -2131,6 +2139,7 @@ export async function dispatchReplyFromConfig(
     });
   };
 
+  let ingressObjective: IngressObjectiveHandle | undefined;
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
     | "plugin-bound-fallback-no-handler"
@@ -2299,7 +2308,6 @@ export async function dispatchReplyFromConfig(
   }
 
   markProcessing();
-
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -2551,9 +2559,7 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const transcriptMirrorSessionKey =
         acpDispatchSessionKey ?? sessionStoreEntry.sessionKey ?? sessionKey;
-      const transcriptMirrorSourceId =
-        normalizeOptionalString(messageIdForHook) ??
-        normalizeOptionalString(params.replyOptions?.runId);
+      const transcriptMirrorSourceId = normalizeOptionalString(messageIdForHook) ?? turnRunId;
       const transcriptMirrorSessionBinding = resolvePreparedTranscriptBinding(
         transcriptMirrorSessionKey,
       );
@@ -2677,7 +2683,7 @@ export async function dispatchReplyFromConfig(
           hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx,
-              runId: params.replyOptions?.runId,
+              runId: turnRunId,
               sessionKey: acpDispatchSessionKey,
               toolsAllow: params.replyOptions?.toolsAllow,
               images: params.replyOptions?.images,
@@ -2719,6 +2725,57 @@ export async function dispatchReplyFromConfig(
 
     if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
       return finishReplyOperationBusyDispatch({ dedupeDisposition: "release" });
+    }
+
+    const ingressSessionKey = acpDispatchSessionKey ?? sessionKey;
+    const ingressIdentity = buildIngressObjectiveIdentity({ ctx, agentId: sessionAgentId });
+    const shouldOwnIngressObjective =
+      resolveReplyTurnKind(params.replyOptions) === "visible" &&
+      params.replyOptions?.isHeartbeat !== true &&
+      !ctx.CommandTurn &&
+      ctx.InboundEventKind !== "room_event" &&
+      Boolean(ingressSessionKey) &&
+      Boolean(ingressIdentity);
+    if (shouldOwnIngressObjective && ingressSessionKey) {
+      const ingress = beginIngressObjective({
+        ctx,
+        sessionKey: ingressSessionKey,
+        agentId: sessionAgentId,
+        runId: turnRunId,
+        onDetached: ({ flowId }) => {
+          if (suppressAutomaticSourceDelivery || sendPolicyDenied) {
+            return;
+          }
+          markInboundDedupeReplayUnsafe();
+          dispatcher.sendToolResult({
+            text: `Still working under durable task ${flowId}. This turn is now receipt-backed; completion will return here.`,
+            isStatusNotice: true,
+          });
+        },
+      });
+      if (ingress.kind === "unavailable") {
+        throw new Error(`durable ingress owner unavailable: ${ingress.reason}`);
+      }
+      if (ingress.kind === "coalesced") {
+        const coalesced = await sendFinalPayload(
+          {
+            text: `Already running as durable task ${ingress.flowId}; this identical retry was coalesced.`,
+            isStatusNotice: true,
+          },
+          { deliveryId: "ingress-coalesced" },
+        );
+        const counts = dispatcher.getQueuedCounts();
+        counts.final += coalesced.routedFinalCount;
+        commitInboundDedupeIfClaimed();
+        recordProcessed("completed", { reason: "ingress_objective_coalesced" });
+        markIdle("message_completed");
+        completeDispatchReplyOperation();
+        return attachSourceReplyDeliveryMode({
+          queuedFinal: coalesced.queuedFinal,
+          counts,
+        });
+      }
+      ingressObjective = ingress;
     }
 
     // When automatic source delivery is suppressed, still let the agent process
@@ -3102,6 +3159,9 @@ export async function dispatchReplyFromConfig(
               params.replyOptions?.onAssistantMessageStart,
             ),
             onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
+            onToolStartObserved: () => {
+              ingressObjective?.markToolStarted();
+            },
             onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
               allowWhenToolSummariesHidden:
                 params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
@@ -3146,6 +3206,7 @@ export async function dispatchReplyFromConfig(
             }),
             onToolResult: (payload: ReplyPayload) => {
               markProgress();
+              ingressObjective?.markToolCompleted(payload.text);
               const run = async () => {
                 if (isDispatchOperationAborted()) {
                   return;
@@ -3484,7 +3545,7 @@ export async function dispatchReplyFromConfig(
           hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx,
-              runId: params.replyOptions?.runId,
+              runId: turnRunId,
               sessionKey: acpDispatchSessionKey,
               toolsAllow: params.replyOptions?.toolsAllow,
               images: params.replyOptions?.images,
@@ -3677,6 +3738,11 @@ export async function dispatchReplyFromConfig(
     }
 
     await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
+    const terminalSummary = replies
+      .map((reply) => normalizeOptionalString(reply.text))
+      .filter((text): text is string => Boolean(text))
+      .at(-1);
+    ingressObjective?.complete(terminalSummary);
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     commitInboundDedupeIfClaimed();
@@ -3703,6 +3769,7 @@ export async function dispatchReplyFromConfig(
     if (isDispatchReplyOperationAbortedError(err)) {
       return finishReplyOperationAbortedDispatch();
     }
+    ingressObjective?.fail(err);
     if (inboundDedupeClaim.status === "claimed") {
       if (inboundDedupeReplayUnsafe) {
         commitInboundDedupe(inboundDedupeClaim.key);
