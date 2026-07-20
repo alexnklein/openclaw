@@ -34,6 +34,8 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { assessIngressObjectiveRecovery } from "../tasks/ingress-objective.js";
+import { endsWithProgressOnlyCompletionText } from "../tasks/task-completion-contract.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
@@ -399,6 +401,45 @@ function isResumableTailMessage(message: unknown): boolean {
   return role === "user" || role === "tool" || role === "toolResult";
 }
 
+function readMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .flatMap((block) => {
+      if (!block || typeof block !== "object") {
+        return [];
+      }
+      const text = (block as { type?: unknown; text?: unknown }).text;
+      return (block as { type?: unknown }).type === "text" && typeof text === "string"
+        ? [text]
+        : [];
+    })
+    .join("\n")
+    .trim();
+}
+
+function isRecoverableAssistantTail(message: unknown): boolean {
+  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+    return false;
+  }
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  if (stopReason === "error") {
+    return true;
+  }
+  if (stopReason !== "stop" && stopReason !== "end_turn") {
+    return false;
+  }
+  return endsWithProgressOnlyCompletionText(readMessageText(message));
+}
+
 function isApprovalPendingToolResult(message: unknown): boolean {
   if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
     return false;
@@ -410,15 +451,70 @@ function isApprovalPendingToolResult(message: unknown): boolean {
   return (details as { status?: unknown }).status === "approval-pending";
 }
 
-function resolveMainSessionResumeBlockReason(messages: unknown[]): string | null {
+type MainSessionResumeDecision =
+  | { kind: "resume" }
+  | { kind: "skip"; reason: string }
+  | { kind: "block"; reason: string };
+
+function resolveMainSessionResumeDecision(params: {
+  messages: unknown[];
+  sessionKey: string;
+}): MainSessionResumeDecision {
+  const { messages, sessionKey } = params;
   const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
-  if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
-    return "transcript tail is not resumable";
+  if (!lastMeaningful) {
+    return { kind: "block", reason: "transcript tail is not resumable" };
   }
-  if (isApprovalPendingToolResult(lastMeaningful)) {
-    return "transcript tail is a stale approval-pending tool result";
+  if (isResumableTailMessage(lastMeaningful)) {
+    if (isApprovalPendingToolResult(lastMeaningful)) {
+      return {
+        kind: "block",
+        reason: "transcript tail is a stale approval-pending tool result",
+      };
+    }
+    return { kind: "resume" };
   }
-  return null;
+  if (!isRecoverableAssistantTail(lastMeaningful)) {
+    return { kind: "block", reason: "transcript tail is not resumable" };
+  }
+
+  const lastAssistantIndex = messages.lastIndexOf(lastMeaningful);
+  const objectiveMessage = messages
+    .slice(0, Math.max(0, lastAssistantIndex))
+    .toReversed()
+    .find((message) => getMessageRole(message) === "user" && readMessageText(message));
+  const objective = objectiveMessage ? readMessageText(objectiveMessage) : "";
+  if (!objective) {
+    return { kind: "block", reason: "recoverable assistant tail has no user objective" };
+  }
+  const afterObjective = messages.slice(messages.lastIndexOf(objectiveMessage) + 1);
+  if (afterObjective.some(isApprovalPendingToolResult)) {
+    return {
+      kind: "block",
+      reason: "transcript contains a stale approval-pending tool result",
+    };
+  }
+
+  const ingress = assessIngressObjectiveRecovery({ sessionKey, requestText: objective });
+  if (ingress.kind === "unsafe") {
+    return {
+      kind: "block",
+      reason: `durable ingress ${ingress.flowId} is unsafe at ${ingress.phase}`,
+    };
+  }
+  if (ingress.kind === "owned") {
+    return {
+      kind: "skip",
+      reason: `durable ingress ${ingress.flowId} is owned by a supervised worker`,
+    };
+  }
+  if (ingress.kind === "terminal") {
+    return {
+      kind: "skip",
+      reason: `durable ingress ${ingress.flowId} is already ${ingress.status}`,
+    };
+  }
+  return { kind: "resume" };
 }
 
 function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
@@ -469,6 +565,35 @@ async function markSessionFailed(params: {
     },
   });
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
+}
+
+async function markSessionRecoverySatisfied(params: {
+  storePath: string;
+  sessionKey: string;
+  reason: string;
+}): Promise<void> {
+  await applyRestartRecoveryLifecycle({
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (!entry) {
+        return { result: undefined };
+      }
+      const now = Date.now();
+      entry.status = "done";
+      entry.abortedLastRun = false;
+      entry.endedAt = entry.endedAt ?? now;
+      entry.updatedAt = now;
+      entry.restartRecoveryDeliveryContext = undefined;
+      entry.restartRecoveryDeliveryRunId = undefined;
+      return {
+        result: undefined,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+  log.info(`restart recovery already satisfied: ${params.sessionKey} (${params.reason})`);
 }
 
 async function sendUnresumableSessionNotice(params: {
@@ -821,18 +946,27 @@ async function recoverStore(params: {
       continue;
     }
 
-    const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
-    if (resumeBlockReason) {
+    const resumeDecision = resolveMainSessionResumeDecision({ messages, sessionKey });
+    if (resumeDecision.kind === "skip") {
+      await markSessionRecoverySatisfied({
+        storePath: params.storePath,
+        sessionKey,
+        reason: resumeDecision.reason,
+      });
+      result.skipped++;
+      continue;
+    }
+    if (resumeDecision.kind === "block") {
       await sendUnresumableSessionNotice({
         cfg: params.cfg,
         entry,
         sessionKey,
-        reason: resumeBlockReason,
+        reason: resumeDecision.reason,
       });
       await markSessionFailed({
         storePath: params.storePath,
         sessionKey,
-        reason: resumeBlockReason,
+        reason: resumeDecision.reason,
       });
       result.failed++;
       continue;

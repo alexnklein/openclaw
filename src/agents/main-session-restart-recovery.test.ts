@@ -27,6 +27,12 @@ import {
 } from "./main-session-restart-recovery.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
+const assessIngressObjectiveRecoveryMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../tasks/ingress-objective.js", () => ({
+  assessIngressObjectiveRecovery: assessIngressObjectiveRecoveryMock,
+}));
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
 }));
@@ -35,6 +41,7 @@ let tmpDir: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  assessIngressObjectiveRecoveryMock.mockReturnValue({ kind: "none" });
   resetAgentRunContextForTest();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-restart-recovery-"));
 });
@@ -1304,6 +1311,123 @@ describe("main-session-restart-recovery", () => {
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.status).toBe("failed");
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+  });
+
+  it("resumes the exact assistant network-error tail from its intact user objective", async () => {
+    const sessionsDir = await makeSessionsDir("mesh-group");
+    const sessionKey = "agent:mesh-group:telegram:group:-1003755488173:topic:2";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "Let's get that ready." },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I’m at integration/regression review now." }],
+        stopReason: "error",
+        errorMessage: "Provider finish_reason: network_error",
+      },
+    ]);
+    assessIngressObjectiveRecoveryMock.mockReturnValue({
+      kind: "recoverable",
+      flowId: "flow-6081",
+      objective: "Let's get that ready.",
+    });
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(assessIngressObjectiveRecoveryMock).toHaveBeenCalledWith({
+      sessionKey,
+      requestText: "Let's get that ready.",
+    });
+    expect(firstGatewayParams().message).toContain("Continue from the existing transcript");
+  });
+
+  it("resumes a normal-stop progress promise from the last user objective", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "bridge the gaps" },
+      {
+        role: "assistant",
+        content: "I’m implementing the continuity fixes now. I’ll keep MTL paused.",
+        stopReason: "stop",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when the matching ingress objective has an in-flight tool", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "perform the external action" },
+      { role: "assistant", content: "working", stopReason: "error" },
+    ]);
+    assessIngressObjectiveRecoveryMock.mockReturnValue({
+      kind: "unsafe",
+      flowId: "flow-unsafe",
+      objective: "perform the external action",
+      phase: "tool_inflight",
+    });
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a turn already owned by its supervised ingress worker", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "continue in background" },
+      { role: "assistant", content: "handoff active", stopReason: "error" },
+    ]);
+    assessIngressObjectiveRecoveryMock.mockReturnValue({
+      kind: "owned",
+      flowId: "flow-worker",
+      objective: "continue in background",
+      phase: "worker_running",
+    });
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]).toMatchObject({ status: "done", abortedLastRun: false });
   });
 
   it("sends a visible notice through legacy session route before failing an unresumable main session", async () => {

@@ -22,6 +22,13 @@ const TERMINAL_STATUSES = new Set<TaskFlowRecord["status"]>([
   "lost",
 ]);
 
+export type IngressObjectiveRecoveryAssessment =
+  | { kind: "none" }
+  | { kind: "recoverable"; flowId: string; objective: string }
+  | { kind: "owned"; flowId: string; objective: string; phase: string }
+  | { kind: "unsafe"; flowId: string; objective: string; phase: string }
+  | { kind: "terminal"; flowId: string; objective: string; status: TaskFlowRecord["status"] };
+
 type IngressCheckpoint = {
   safe: boolean;
   phase:
@@ -84,6 +91,46 @@ type BeginIngressObjectiveParams = {
 
 function canonicalizeRequest(text: string): string {
   return text.normalize("NFKC").replace(/\r\n?/gu, "\n").trim();
+}
+
+/**
+ * Finds the content-bound durable ingress objective for restart recovery.
+ * Recovery callers use this before replaying an assistant error/progress tail:
+ * a safe waiting checkpoint may resume, a worker-owned checkpoint must not be
+ * duplicated, and an in-flight tool checkpoint must fail closed.
+ */
+export function assessIngressObjectiveRecovery(params: {
+  sessionKey: string;
+  requestText: string;
+}): IngressObjectiveRecoveryAssessment {
+  const sessionKey = params.sessionKey.trim();
+  const request = canonicalizeRequest(params.requestText);
+  if (!sessionKey || !request) {
+    return { kind: "none" };
+  }
+  const requestHash = createHash("sha256").update(request).digest("hex");
+  const match = listTaskFlowRecords()
+    .filter((flow) => flow.controllerId === CONTROLLER_ID && flow.ownerKey === sessionKey)
+    .filter((flow) => readIngressState(flow)?.requestHash === requestHash)
+    .toSorted((left, right) => right.updatedAt - left.updatedAt)[0];
+  if (!match) {
+    return { kind: "none" };
+  }
+  const state = readIngressState(match);
+  if (!state) {
+    return { kind: "none" };
+  }
+  const base = { flowId: match.flowId, objective: match.goal };
+  if (state.checkpoint.phase === "worker_running") {
+    return { kind: "owned", ...base, phase: state.checkpoint.phase };
+  }
+  if (!state.checkpoint.safe) {
+    return { kind: "unsafe", ...base, phase: state.checkpoint.phase };
+  }
+  if (TERMINAL_STATUSES.has(match.status)) {
+    return { kind: "terminal", ...base, status: match.status };
+  }
+  return { kind: "recoverable", ...base };
 }
 
 function resolveRequestText(ctx: FinalizedMsgContext): string {
@@ -336,7 +383,7 @@ function createObjective(
     if (currentState?.checkpoint.safe !== true) {
       return;
     }
-    let accepted = false;
+    let accepted: boolean;
     try {
       accepted = params.onDetached({ flowId: flow.flowId, taskId: task.taskId });
     } catch {

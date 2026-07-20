@@ -2,7 +2,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { beginIngressObjective, buildIngressObjectiveIdentity } from "./ingress-objective.js";
+import {
+  assessIngressObjectiveRecovery,
+  beginIngressObjective,
+  buildIngressObjectiveIdentity,
+} from "./ingress-objective.js";
 import { getTaskFlowById, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import { getTaskById, resetTaskRegistryForTests } from "./task-registry.js";
 
@@ -198,6 +202,52 @@ describe("ingress-objective", () => {
         flowId: objective.flowId,
         status: "blocked",
       });
+    });
+  });
+
+  it("classifies restart recovery from the content-bound checkpoint", async () => {
+    await withRegistryState(async () => {
+      const sessionKey = "agent:main:telegram:topic-2";
+      const objective = beginIngressObjective({
+        ctx: createContext("Recover this exact objective"),
+        sessionKey,
+        agentId: "main",
+        runId: "run-recovery",
+        onDetached: () => true,
+        detachAfterMs: 60_000,
+      });
+      expect(objective.kind).toBe("created");
+      if (objective.kind !== "created") {
+        return;
+      }
+
+      expect(
+        assessIngressObjectiveRecovery({
+          sessionKey,
+          requestText: "Recover this exact objective",
+        }),
+      ).toMatchObject({ kind: "recoverable", flowId: objective.flowId });
+      expect(
+        assessIngressObjectiveRecovery({
+          sessionKey,
+          requestText: "Different objective",
+        }),
+      ).toEqual({ kind: "none" });
+
+      objective.markToolStarted("external write");
+      expect(
+        assessIngressObjectiveRecovery({
+          sessionKey,
+          requestText: "Recover this exact objective",
+        }),
+      ).toMatchObject({ kind: "unsafe", flowId: objective.flowId, phase: "tool_inflight" });
+      objective.fail(new Error("provider ended during write"));
+      expect(
+        assessIngressObjectiveRecovery({
+          sessionKey,
+          requestText: "Recover this exact objective",
+        }),
+      ).toMatchObject({ kind: "unsafe", flowId: objective.flowId, phase: "terminal" });
     });
   });
 });
