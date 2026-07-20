@@ -41,6 +41,10 @@ import {
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
 import {
+  startIngressObjectiveTyping,
+  stopIngressObjectiveTyping,
+} from "./ingress-objective-typing.js";
+import {
   isChildlessNativeSubagentTask,
   resolveChildlessNativeSubagentTaskDefinition,
 } from "./native-subagent-task.js";
@@ -1221,6 +1225,7 @@ export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummar
 
 export function startTaskRegistryMaintenance() {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  startIngressObjectiveTyping();
   deferredSweep = setTimeout(() => {
     deferredSweep = null;
     startScheduledSweep();
@@ -1234,6 +1239,7 @@ export function startTaskRegistryMaintenance() {
 }
 
 export function stopTaskRegistryMaintenance() {
+  stopIngressObjectiveTyping();
   if (deferredSweep) {
     clearTimeout(deferredSweep);
     deferredSweep = null;

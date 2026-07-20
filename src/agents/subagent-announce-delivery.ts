@@ -10,7 +10,11 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyPayloadText,
+  SILENT_REPLY_TOKEN,
+  stripEdgeProgressSentinels,
+} from "../auto-reply/tokens.js";
 import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
@@ -1051,14 +1055,18 @@ async function deliverTextCompletionDirect(params: {
     threadId?: string;
   };
   internalEvents?: readonly AgentInternalEvent[];
+  allowThreadTarget?: boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const content = resolveTextCompletionDirectFallback(params.internalEvents);
+  const content = stripEdgeProgressSentinels(
+    resolveTextCompletionDirectFallback(params.internalEvents) ?? "",
+  ).trim();
   if (
     !content ||
     !params.deliveryTarget.deliver ||
     !params.deliveryTarget.channel ||
     !params.deliveryTarget.to ||
-    !isDirectMessageDeliveryTarget(params.deliveryTarget, params.requesterSessionKey)
+    (!params.allowThreadTarget &&
+      !isDirectMessageDeliveryTarget(params.deliveryTarget, params.requesterSessionKey))
   ) {
     return undefined;
   }
@@ -1322,6 +1330,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   requesterIsSubagent: boolean;
+  deliverResultDirectly?: boolean;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -1365,6 +1374,24 @@ async function sendSubagentAnnounceDirectly(params: {
           threadId: effectiveDirectOrigin?.threadId,
         })
       : { deliver: false };
+    if (params.deliverResultDirectly && params.expectsCompletionMessage) {
+      const directResult = await deliverTextCompletionDirect({
+        cfg,
+        requesterSessionKey: canonicalRequesterSessionKey,
+        directIdempotencyKey: params.directIdempotencyKey,
+        deliveryTarget,
+        internalEvents: params.internalEvents,
+        allowThreadTarget: true,
+      });
+      return (
+        directResult ?? {
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "visible continuation worker lacked an exact-origin terminal payload",
+        }
+      );
+    }
     const normalizedSessionOnlyOriginChannel = !params.requesterIsSubagent
       ? normalizeMessageChannel(sessionOnlyOrigin?.channel)
       : undefined;
@@ -1786,6 +1813,7 @@ export async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  deliverResultDirectly?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   signal?: AbortSignal;
@@ -1817,6 +1845,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        deliverResultDirectly: params.deliverResultDirectly,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),

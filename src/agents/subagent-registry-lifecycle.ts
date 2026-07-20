@@ -18,6 +18,11 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
 import {
+  blockIngressObjectiveWorkerDelivery,
+  isIngressObjectiveWorker,
+  recordIngressObjectiveWorkerDelivery,
+} from "../tasks/ingress-objective.js";
+import {
   resolveRequiredCompletionDeliveryFailureTerminalResult,
   resolveRequiredCompletionTerminalResult,
 } from "../tasks/task-completion-contract.js";
@@ -367,6 +372,10 @@ export function createSubagentRegistryLifecycleController(params: {
     if (args.entry.expectsCompletionMessage !== true || args.entry.outcome?.status !== "ok") {
       return;
     }
+    blockIngressObjectiveWorkerDelivery({
+      workerRunId: args.entry.runId,
+      reason: args.reason,
+    });
     const endedAt = args.entry.endedAt ?? Date.now();
     const terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(args.reason);
     try {
@@ -1060,9 +1069,19 @@ export function createSubagentRegistryLifecycleController(params: {
         outcome: pendingPayload.outcome,
         spawnMode: pendingPayload.spawnMode,
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
+        deliverResultDirectly: isIngressObjectiveWorker({
+          workerRunId: entry.runId,
+        }),
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
         onDeliveryResult: (delivery) => {
           recordAnnounceDeliveryResult(entry, delivery);
+          recordIngressObjectiveWorkerDelivery({
+            workerRunId: entry.runId,
+            delivered: delivery.delivered,
+            outcome: entry.outcome?.status ?? "unknown",
+            summary: ensureCompletionState(entry).resultText ?? undefined,
+            error: delivery.error,
+          });
           if (delivery.delivered) {
             const deliveryState = ensureDeliveryState(entry);
             if (deliveryState.lastError !== undefined) {

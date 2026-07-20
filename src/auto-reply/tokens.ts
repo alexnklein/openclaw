@@ -21,10 +21,14 @@ const silentTrailingRegexByToken = new Map<string, RegExp>();
 const silentLeadingAttachedRegexByToken = new Map<string, RegExp>();
 const EDGE_PROGRESS_SENTINEL_RE = /^(?:\s*\u2063)+|(?:\u2063\s*)+$/gu;
 
+export function stripEdgeProgressSentinels(text: string): string {
+  return text.replace(EDGE_PROGRESS_SENTINEL_RE, "");
+}
+
 function normalizeSilentReplyCandidate(text: string): string {
   // U+2063 is a progress/liveness control. Ignore leaked edge markers only for
   // token classification; normal reply payloads retain their original Unicode.
-  return text.replace(EDGE_PROGRESS_SENTINEL_RE, "");
+  return stripEdgeProgressSentinels(text);
 }
 
 function getSilentExactRegex(token: string): RegExp {

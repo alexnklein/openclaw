@@ -5,7 +5,11 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assessIngressObjectiveRecovery,
   beginIngressObjective,
+  blockIngressObjectiveWorkerDelivery,
   buildIngressObjectiveIdentity,
+  isIngressObjectiveWorker,
+  listActiveIngressObjectiveTypingTargets,
+  recordIngressObjectiveWorkerDelivery,
 } from "./ingress-objective.js";
 import { getTaskFlowById, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import { getTaskById, resetTaskRegistryForTests } from "./task-registry.js";
@@ -164,6 +168,130 @@ describe("ingress-objective", () => {
         currentStep: "worker_execution",
       });
       expect(getTaskById(objective.taskId)?.status).toBe("succeeded");
+    });
+  });
+
+  it("keeps worker completion owned until exact-origin delivery terminalizes the flow", async () => {
+    vi.useFakeTimers();
+    await withRegistryState(async () => {
+      const objective = beginIngressObjective({
+        ctx: createContext("Finish in the supervised worker", {
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:-1001:topic:2",
+          AccountId: "default",
+          MessageThreadId: 2,
+        }),
+        sessionKey: "agent:main:telegram:topic-2",
+        agentId: "main",
+        runId: "inline-run",
+        onDetached: () => true,
+        detachAfterMs: 1,
+      });
+      expect(objective.kind).toBe("created");
+      if (objective.kind !== "created") {
+        return;
+      }
+      await vi.advanceTimersByTimeAsync(2);
+      expect(
+        objective.transferToWorker({
+          childSessionKey: "agent:main:subagent:worker",
+          runId: "worker-run",
+        }),
+      ).toBe(true);
+      expect(
+        isIngressObjectiveWorker({ flowId: objective.flowId, workerRunId: "worker-run" }),
+      ).toBe(true);
+      expect(listActiveIngressObjectiveTypingTargets()).toEqual([
+        {
+          flowId: objective.flowId,
+          channel: "telegram",
+          to: "telegram:-1001:topic:2",
+          accountId: "default",
+          threadId: 2,
+        },
+      ]);
+
+      expect(
+        recordIngressObjectiveWorkerDelivery({
+          flowId: objective.flowId,
+          workerRunId: "worker-run",
+          delivered: false,
+          outcome: "ok",
+          summary: "done",
+          error: "Telegram unavailable",
+        }),
+      ).toBe(true);
+      expect(getTaskFlowById(objective.flowId)).toMatchObject({
+        status: "running",
+        currentStep: "terminal_delivery_pending",
+        stateJson: { checkpoint: { phase: "worker_delivery_pending" } },
+      });
+      expect(listActiveIngressObjectiveTypingTargets()).toEqual([]);
+      expect(
+        assessIngressObjectiveRecovery({
+          sessionKey: "agent:main:telegram:topic-2",
+          requestText: "Finish in the supervised worker",
+        }),
+      ).toMatchObject({ kind: "owned", phase: "worker_delivery_pending" });
+
+      expect(
+        recordIngressObjectiveWorkerDelivery({
+          flowId: objective.flowId,
+          workerRunId: "worker-run",
+          delivered: true,
+          outcome: "ok",
+          summary: "done",
+        }),
+      ).toBe(true);
+      expect(getTaskFlowById(objective.flowId)).toMatchObject({
+        status: "succeeded",
+        currentStep: "completed",
+        stateJson: { checkpoint: { phase: "terminal", safe: true } },
+      });
+    });
+  });
+
+  it("keeps a worker flow nonterminal when durable terminal delivery exhausts retries", async () => {
+    vi.useFakeTimers();
+    await withRegistryState(async () => {
+      const objective = beginIngressObjective({
+        ctx: createContext("Deliver the final exactly once"),
+        sessionKey: "agent:main:telegram:topic-2",
+        agentId: "main",
+        runId: "inline-run",
+        onDetached: () => true,
+        detachAfterMs: 1,
+      });
+      expect(objective.kind).toBe("created");
+      if (objective.kind !== "created") {
+        return;
+      }
+      await vi.advanceTimersByTimeAsync(2);
+      expect(
+        objective.transferToWorker({
+          childSessionKey: "agent:main:subagent:worker",
+          runId: "worker-run",
+        }),
+      ).toBe(true);
+      recordIngressObjectiveWorkerDelivery({
+        flowId: objective.flowId,
+        workerRunId: "worker-run",
+        delivered: false,
+        outcome: "ok",
+        error: "delivery retries exhausted",
+      });
+      expect(
+        blockIngressObjectiveWorkerDelivery({
+          flowId: objective.flowId,
+          workerRunId: "worker-run",
+          reason: "delivery retries exhausted",
+        }),
+      ).toBe(true);
+      expect(getTaskFlowById(objective.flowId)).toMatchObject({
+        status: "running",
+        currentStep: "terminal_delivery_suspended",
+        stateJson: { checkpoint: { phase: "worker_delivery_pending", safe: false } },
+      });
     });
   });
 

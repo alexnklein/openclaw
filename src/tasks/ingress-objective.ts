@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "./detached-task-runtime.js";
-import { updateTaskNotifyPolicyById } from "./runtime-internal.js";
+import { findTaskByRunId, updateTaskNotifyPolicyById } from "./runtime-internal.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   createManagedTaskFlow,
@@ -37,6 +37,7 @@ type IngressCheckpoint = {
     | "after_tool"
     | "handoff_requested"
     | "worker_running"
+    | "worker_delivery_pending"
     | "waiting_successor"
     | "terminal";
   summary?: string;
@@ -121,7 +122,10 @@ export function assessIngressObjectiveRecovery(params: {
     return { kind: "none" };
   }
   const base = { flowId: match.flowId, objective: match.goal };
-  if (state.checkpoint.phase === "worker_running") {
+  if (
+    state.checkpoint.phase === "worker_running" ||
+    state.checkpoint.phase === "worker_delivery_pending"
+  ) {
     return { kind: "owned", ...base, phase: state.checkpoint.phase };
   }
   if (!state.checkpoint.safe) {
@@ -205,6 +209,182 @@ function findMatchingFlow(identity: string): TaskFlowRecord | undefined {
     .filter((flow) => flow.controllerId === CONTROLLER_ID)
     .filter((flow) => readIngressState(flow)?.identity === identity)
     .toSorted((left, right) => right.updatedAt - left.updatedAt)[0];
+}
+
+export function isIngressObjectiveWorker(params: {
+  flowId?: string;
+  workerRunId: string;
+}): boolean {
+  const workerRunId = params.workerRunId.trim();
+  const flowId = resolveIngressWorkerFlowId({ flowId: params.flowId, workerRunId });
+  if (!flowId || !workerRunId) {
+    return false;
+  }
+  const flow = getTaskFlowById(flowId);
+  const state = flow ? readIngressState(flow) : null;
+  return (
+    flow?.controllerId === CONTROLLER_ID &&
+    state?.workerRunId === workerRunId &&
+    (state.checkpoint.phase === "worker_running" ||
+      state.checkpoint.phase === "worker_delivery_pending")
+  );
+}
+
+export function recordIngressObjectiveWorkerDelivery(params: {
+  flowId?: string;
+  workerRunId: string;
+  delivered: boolean;
+  outcome: "ok" | "timeout" | "error" | "unknown";
+  summary?: string;
+  error?: string;
+}): boolean {
+  const workerRunId = params.workerRunId.trim();
+  const flowId = resolveIngressWorkerFlowId({ flowId: params.flowId, workerRunId });
+  if (!flowId || !workerRunId) {
+    return false;
+  }
+  const current = getTaskFlowById(flowId);
+  const state = current ? readIngressState(current) : null;
+  if (
+    current?.controllerId !== CONTROLLER_ID ||
+    state?.workerRunId !== workerRunId ||
+    (state.checkpoint.phase !== "worker_running" &&
+      state.checkpoint.phase !== "worker_delivery_pending")
+  ) {
+    return false;
+  }
+  const summary = normalizeOptionalString(params.summary);
+  const error = normalizeOptionalString(params.error);
+  if (!params.delivered) {
+    return Boolean(
+      updateFlow(flowId, (_flow, nextState) => ({
+        status: "running",
+        currentStep: "terminal_delivery_pending",
+        endedAt: null,
+        state: {
+          ...nextState,
+          checkpoint: {
+            safe: false,
+            phase: "worker_delivery_pending",
+            summary: error ?? summary ?? "worker terminal delivery pending",
+            updatedAt: Date.now(),
+          },
+        },
+      })),
+    );
+  }
+  const succeeded = params.outcome === "ok";
+  return Boolean(
+    updateFlow(flowId, (_flow, nextState) => ({
+      status: succeeded ? "succeeded" : "failed",
+      currentStep: succeeded ? "completed" : "worker_failed",
+      endedAt: Date.now(),
+      state: {
+        ...nextState,
+        checkpoint: {
+          safe: succeeded,
+          phase: "terminal",
+          summary:
+            error ?? summary ?? (succeeded ? "worker completion delivered" : "worker failed"),
+          updatedAt: Date.now(),
+        },
+      },
+    })),
+  );
+}
+
+export function blockIngressObjectiveWorkerDelivery(params: {
+  flowId?: string;
+  workerRunId: string;
+  reason?: string;
+}): boolean {
+  const workerRunId = params.workerRunId.trim();
+  const flowId = resolveIngressWorkerFlowId({ flowId: params.flowId, workerRunId });
+  if (!flowId || !workerRunId) {
+    return false;
+  }
+  const current = getTaskFlowById(flowId);
+  const state = current ? readIngressState(current) : null;
+  if (
+    current?.controllerId !== CONTROLLER_ID ||
+    !state ||
+    state.workerRunId !== workerRunId ||
+    state.checkpoint.phase !== "worker_delivery_pending"
+  ) {
+    return false;
+  }
+  const reason = normalizeOptionalString(params.reason) ?? "worker terminal delivery blocked";
+  return Boolean(
+    updateFlow(flowId, (_flow, nextState) => ({
+      status: "running",
+      currentStep: "terminal_delivery_suspended",
+      endedAt: null,
+      state: {
+        ...nextState,
+        checkpoint: {
+          safe: false,
+          phase: "worker_delivery_pending",
+          summary: reason,
+          updatedAt: Date.now(),
+        },
+      },
+    })),
+  );
+}
+
+export function listActiveIngressObjectiveTypingTargets(): Array<{
+  flowId: string;
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+}> {
+  const targets = new Map<
+    string,
+    {
+      flowId: string;
+      channel: string;
+      to: string;
+      accountId?: string;
+      threadId?: string | number;
+    }
+  >();
+  for (const flow of listTaskFlowRecords()) {
+    const state = readIngressState(flow);
+    const channel = normalizeOptionalString(flow.requesterOrigin?.channel);
+    const to = normalizeOptionalString(flow.requesterOrigin?.to);
+    if (
+      flow.controllerId !== CONTROLLER_ID ||
+      flow.status !== "running" ||
+      state?.checkpoint.phase !== "worker_running" ||
+      !channel ||
+      !to
+    ) {
+      continue;
+    }
+    const accountId = normalizeOptionalString(flow.requesterOrigin?.accountId);
+    const threadId = flow.requesterOrigin?.threadId;
+    const key = JSON.stringify([channel, to, accountId ?? "", threadId ?? ""]);
+    targets.set(key, {
+      flowId: flow.flowId,
+      channel,
+      to,
+      ...(accountId ? { accountId } : {}),
+      ...(threadId != null && threadId !== "" ? { threadId } : {}),
+    });
+  }
+  return [...targets.values()];
+}
+
+function resolveIngressWorkerFlowId(params: {
+  flowId?: string;
+  workerRunId: string;
+}): string | undefined {
+  const explicitFlowId = normalizeOptionalString(params.flowId);
+  if (explicitFlowId) {
+    return explicitFlowId;
+  }
+  return normalizeOptionalString(findTaskByRunId(params.workerRunId)?.parentFlowId);
 }
 
 function updateFlow(

@@ -37,6 +37,12 @@ const runtimeMocks = vi.hoisted(() => ({
   log: vi.fn(),
 }));
 
+const ingressObjectiveMocks = vi.hoisted(() => ({
+  blockIngressObjectiveWorkerDelivery: vi.fn(() => false),
+  isIngressObjectiveWorker: vi.fn(() => false),
+  recordIngressObjectiveWorkerDelivery: vi.fn(() => false),
+}));
+
 const lifecycleEventMocks = vi.hoisted(() => ({
   emitSessionLifecycleEvent: vi.fn(),
 }));
@@ -53,6 +59,12 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
   completeTaskRunByRunId: taskExecutorMocks.completeTaskRunByRunId,
   failTaskRunByRunId: taskExecutorMocks.failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId: taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId,
+}));
+
+vi.mock("../tasks/ingress-objective.js", () => ({
+  blockIngressObjectiveWorkerDelivery: ingressObjectiveMocks.blockIngressObjectiveWorkerDelivery,
+  isIngressObjectiveWorker: ingressObjectiveMocks.isIngressObjectiveWorker,
+  recordIngressObjectiveWorkerDelivery: ingressObjectiveMocks.recordIngressObjectiveWorkerDelivery,
 }));
 
 vi.mock("../sessions/session-lifecycle-events.js", () => ({
@@ -268,6 +280,9 @@ describe("subagent registry lifecycle hardening", () => {
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockClear();
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
+    ingressObjectiveMocks.blockIngressObjectiveWorkerDelivery.mockReturnValue(false);
+    ingressObjectiveMocks.isIngressObjectiveWorker.mockReturnValue(false);
+    ingressObjectiveMocks.recordIngressObjectiveWorkerDelivery.mockReturnValue(false);
   });
 
   it("does not reject completion when task finalization throws", async () => {
@@ -584,6 +599,43 @@ describe("subagent registry lifecycle hardening", () => {
     expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
       runId: entry.runId,
       deliveryStatus: "delivered",
+    });
+  });
+
+  it("routes verified ingress workers directly and records exact-origin delivery", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "worker terminal" },
+    });
+    ingressObjectiveMocks.isIngressObjectiveWorker.mockReturnValue(true);
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: true,
+          path: "direct",
+          deliveredAt: 12_300,
+        });
+        return true;
+      },
+    );
+
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+
+    await vi.waitFor(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+    expectFields(firstCallArg(runSubagentAnnounceFlow), { deliverResultDirectly: true });
+    expect(ingressObjectiveMocks.recordIngressObjectiveWorkerDelivery).toHaveBeenCalledWith({
+      workerRunId: entry.runId,
+      delivered: true,
+      outcome: "ok",
+      summary: "worker terminal",
+      error: undefined,
     });
   });
 

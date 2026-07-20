@@ -4,6 +4,7 @@ export {
   createTaskRecord,
   deleteTaskRecordById,
   ensureTaskRegistryReady,
+  findTaskByRunId,
   resetTaskRegistryControlRuntimeForTests,
   findLatestTaskForFlowId,
   finalizeTaskRunByRunId,

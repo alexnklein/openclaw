@@ -4810,6 +4810,80 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
+  it("delivers durable ingress worker results directly to the exact Telegram topic", async () => {
+    const callGateway = createGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:telegram:group:-1003871627242:topic:6823",
+      targetRequesterSessionKey: "agent:main:telegram:group:-1003871627242:topic:6823",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: 6823,
+      },
+      completionDirectOrigin: {
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: 6823,
+      },
+      directOrigin: {
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: 6823,
+      },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      deliverResultDirectly: true,
+      directIdempotencyKey: "flow-1:worker-1:terminal",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:worker",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "durable ingress continuation",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "\u2063\u2063CONTINUITY_LIVE_PASS done\u2063",
+          replyInstruction: "unused",
+        },
+      ],
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: "6823",
+        content: "CONTINUITY_LIVE_PASS done",
+        idempotencyKey: "flow-1:worker-1:terminal:text-direct",
+      }),
+    );
+  });
+
   it("requires message-tool delivery for direct subagent completions", async () => {
     const callGateway = createGatewayMock({
       result: {
