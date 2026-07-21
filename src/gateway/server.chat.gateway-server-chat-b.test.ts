@@ -2836,7 +2836,7 @@ describe("gateway server chat", () => {
 
       const messages = await fetchHistoryMessages(ws, { maxChars: 7 });
       const serialized = JSON.stringify(messages);
-      expect(serialized).toContain("abcdefg\\n...(truncated)...");
+      expect(serialized).toContain("abcdefg\\n...[additional history omitted]...");
     });
   });
 
@@ -2879,7 +2879,9 @@ describe("gateway server chat", () => {
       ]);
 
       const historyMessages = await fetchHistoryMessages(ws, { maxChars: 5 });
-      expect(JSON.stringify(historyMessages)).toContain("abcde\\n...(truncated)...");
+      expect(JSON.stringify(historyMessages)).toContain(
+        "abcde\\n...[additional history omitted]...",
+      );
 
       const full = await fetchChatMessage(ws, {
         sessionKey: "main",
@@ -2888,7 +2890,7 @@ describe("gateway server chat", () => {
       expect(full.ok).toBe(true);
       expect(full.unavailableReason).toBeUndefined();
       expect(JSON.stringify(full.message)).toContain("abcdefghij");
-      expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+      expect(JSON.stringify(full.message)).not.toContain("additional history omitted");
     });
   });
 
@@ -2913,7 +2915,9 @@ describe("gateway server chat", () => {
       );
 
       const historyMessages = await fetchHistoryMessages(ws, { maxChars: 12 });
-      expect(JSON.stringify(historyMessages)).toContain("archive abcd\\n...(truncated)...");
+      expect(JSON.stringify(historyMessages)).toContain(
+        "archive abcd\\n...[additional history omitted]...",
+      );
 
       const full = await fetchChatMessage(ws, {
         sessionKey: "main",
@@ -2922,7 +2926,7 @@ describe("gateway server chat", () => {
       expect(full.ok).toBe(true);
       expect(full.unavailableReason).toBeUndefined();
       expect(JSON.stringify(full.message)).toContain("archive abcdefghij");
-      expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+      expect(JSON.stringify(full.message)).not.toContain("additional history omitted");
     });
   });
 

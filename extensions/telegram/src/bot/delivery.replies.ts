@@ -1,4 +1,8 @@
 // Telegram plugin module implements delivery.replies behavior.
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { type Bot, GrammyError, InputFile } from "grammy";
 import {
   createOutboundPayloadPlan,
@@ -58,6 +62,7 @@ import {
 
 const VOICE_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
+const LONG_REPLY_DOCUMENT_PREFIX = "openclaw-telegram-reply-";
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -79,6 +84,35 @@ type TelegramReplyQuoteForSend = {
   position?: number;
   entities?: unknown[];
 };
+
+type MaterializedLongReplyDocument = {
+  caption: string;
+  filePath: string;
+  rootDir: string;
+};
+
+function resolveLeadingMentions(text: string): string | undefined {
+  const firstLine = text.trimStart().split(/\r?\n/u, 1)[0]?.trim();
+  const match = firstLine?.match(/^((?:@[A-Za-z0-9_]{3,32})(?:\s+@[A-Za-z0-9_]{3,32})*)\b/u);
+  return match?.[1];
+}
+
+async function materializeLongReplyDocument(text: string): Promise<MaterializedLongReplyDocument> {
+  const hash = createHash("sha256").update(text).digest("hex");
+  const byteCount = Buffer.byteLength(text, "utf8");
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), LONG_REPLY_DOCUMENT_PREFIX));
+  const fileName = `telegram-reply-${Date.now()}-${hash.slice(0, 12)}.md`;
+  const filePath = path.join(rootDir, fileName);
+  await fs.writeFile(filePath, text, { mode: 0o600 });
+  const mentions = resolveLeadingMentions(text);
+  const caption = [
+    ...(mentions ? [mentions, ""] : []),
+    `Full reply attached: ${fileName}`,
+    `Bytes: ${byteCount}`,
+    `SHA-256: ${hash}`,
+  ].join("\n");
+  return { caption, filePath, rootDir };
+}
 
 type TelegramDeliveryTextChunk = {
   text: string;
@@ -845,11 +879,12 @@ export async function deliverReplies(params: {
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  const effectiveTextLimit =
+    params.richMessages === true
+      ? Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT)
+      : Math.min(params.textLimit, 4000);
   const chunkText = buildChunkTextResolver({
-    textLimit:
-      params.richMessages === true
-        ? Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT)
-        : Math.min(params.textLimit, 4000),
+    textLimit: effectiveTextLimit,
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
     richMessages: params.richMessages,
@@ -965,6 +1000,30 @@ export async function deliverReplies(params: {
         }),
       );
       let firstDeliveredMessageId: number | undefined;
+      let deliveryReply = reply;
+      let deliveryMediaList = mediaList;
+      let deliveryMediaLocalRoots = params.mediaLocalRoots;
+      if (
+        deliveryMediaList.length === 0 &&
+        !reactionEmoji &&
+        (deliveryReply.text ?? "").length > effectiveTextLimit
+      ) {
+        const document = await materializeLongReplyDocument(deliveryReply.text ?? "");
+        deliveryReply = {
+          ...deliveryReply,
+          text: document.caption,
+          mediaUrl: document.filePath,
+          mediaUrls: [document.filePath],
+        };
+        deliveryMediaList = [document.filePath];
+        deliveryMediaLocalRoots = [...(params.mediaLocalRoots ?? []), document.rootDir];
+        logVerbose(
+          `telegram long text reply promoted to document bytes=${Buffer.byteLength(
+            contentForSentHook,
+            "utf8",
+          )}`,
+        );
+      }
       if (reactionEmoji && typeof replyToId === "number") {
         const reactionResult = await reactMessageTelegram(params.chatId, replyToId, reactionEmoji, {
           cfg: params.cfg ?? { channels: { telegram: { botToken: params.token } } },
@@ -981,14 +1040,14 @@ export async function deliverReplies(params: {
           continue;
         }
       }
-      if (mediaList.length === 0 && resolvedReplyText) {
+      if (deliveryMediaList.length === 0 && resolvedReplyText) {
         firstDeliveredMessageId = await deliverTextReply({
           bot: params.bot,
           chatId: params.chatId,
           runtime: params.runtime,
           thread: params.thread,
           chunkText,
-          replyText: reply.text || "",
+          replyText: deliveryReply.text || "",
           replyMarkup,
           replyQuoteMessageId: replyQuote.messageId,
           replyQuoteText: replyQuote.text,
@@ -1002,17 +1061,17 @@ export async function deliverReplies(params: {
           replyToMode: params.replyToMode,
           progress,
         });
-      } else if (mediaList.length > 0) {
+      } else if (deliveryMediaList.length > 0) {
         const mediaDelivery = await deliverMediaReply({
-          reply,
-          mediaList,
+          reply: deliveryReply,
+          mediaList: deliveryMediaList,
           bot: params.bot,
           chatId: params.chatId,
           runtime: params.runtime,
           thread: params.thread,
           tableMode: params.tableMode,
           richMessages: params.richMessages,
-          mediaLocalRoots: params.mediaLocalRoots,
+          mediaLocalRoots: deliveryMediaLocalRoots,
           mediaMaxBytes: params.mediaMaxBytes,
           chunkText,
           mediaLoader,

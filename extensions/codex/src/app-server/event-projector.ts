@@ -12,6 +12,7 @@ import {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeCompactionHook,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
+  TOOL_PROGRESS_OUTPUT_OMITTED_SUFFIX,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -1019,7 +1020,7 @@ export class CodexAppServerEventProjector {
       this.toolResultOutputDeltaState.set(itemId, state);
       this.emitToolResultMessage({
         itemId,
-        text: formatToolOutput(toolName, undefined, "(output truncated)"),
+        text: formatToolOutput(toolName, undefined, "[additional output omitted]"),
       });
       return;
     }
@@ -1040,7 +1041,7 @@ export class CodexAppServerEventProjector {
       text: formatToolOutput(
         toolName,
         undefined,
-        reachedLimit ? `${chunk}\n...(truncated)...` : chunk,
+        reachedLimit ? `${chunk}${TOOL_PROGRESS_OUTPUT_OMITTED_SUFFIX}` : chunk,
       ),
     });
   }
@@ -2750,7 +2751,7 @@ function truncateToolTranscriptText(text: string): string {
   if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     return text;
   }
-  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}${TOOL_PROGRESS_OUTPUT_OMITTED_SUFFIX}`;
 }
 
 function toolResultStatusText(params: ToolTranscriptResultInput): string {

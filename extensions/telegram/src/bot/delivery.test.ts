@@ -1,4 +1,5 @@
 // Telegram tests cover delivery plugin behavior.
+import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -923,6 +924,64 @@ describe("deliverReplies", () => {
     expect(loadWebMedia).toHaveBeenCalledWith("/tmp/workspace-work/photo.jpg", {
       localRoots: mediaLocalRoots,
     });
+  });
+
+  it("promotes oversized text-only replies to a document with a verifiable caption", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn();
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 14,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage, sendDocument });
+    const text = `@claudecode_meshbot\n\n${"x".repeat(4100)}`;
+    const hash = createHash("sha256").update(text).digest("hex");
+
+    mockMediaLoad("telegram-reply.md", "text/markdown", text);
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(loadWebMedia).toHaveBeenCalledTimes(1);
+    const [mediaUrl, loadOptions] = loadWebMedia.mock.calls[0] ?? [];
+    expect(mediaUrl).toBeTypeOf("string");
+    expect(String(mediaUrl)).toContain("openclaw-telegram-reply-");
+    const localRoots = (loadOptions as { localRoots?: string[] } | undefined)?.localRoots ?? [];
+    expect(localRoots.some((root) => String(mediaUrl).startsWith(root))).toBe(true);
+
+    expect(sendDocument).toHaveBeenCalledTimes(1);
+    const options = firstMockCallArg(sendDocument, 2) as Record<string, unknown>;
+    expect(options.caption).toContain("@claudecode_meshbot");
+    expect(options.caption).toContain(`SHA-256: ${hash}`);
+    expect(String(options.caption)).not.toContain("x".repeat(100));
+  });
+
+  it("promotes replies that exceed Telegram's effective non-rich text limit", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn();
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 15,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage, sendDocument });
+    const text = "x".repeat(4001);
+
+    mockMediaLoad("telegram-reply.md", "text/markdown", text);
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      textLimit: 4096,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendDocument).toHaveBeenCalledTimes(1);
   });
 
   it("passes the configured media byte cap to media loading", async () => {

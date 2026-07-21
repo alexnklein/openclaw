@@ -24,8 +24,9 @@ import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { truncateUtf16Safe } from "../utils.js";
 
-/** Default truncation limit for user-facing tool progress output. */
-export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+/** Default omission boundary for user-facing tool progress output. */
+export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 64_000;
+export const TOOL_PROGRESS_OUTPUT_OMITTED_SUFFIX = "\n...[additional output omitted]...";
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
 export {
@@ -412,7 +413,7 @@ export function formatToolProgressOutput(
   if (redacted.length <= maxChars) {
     return redacted;
   }
-  return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
+  return `${truncateUtf16Safe(redacted, maxChars)}${TOOL_PROGRESS_OUTPUT_OMITTED_SUFFIX}`;
 }
 
 /** Inputs used to classify a finished harness turn with little or no visible assistant output. */

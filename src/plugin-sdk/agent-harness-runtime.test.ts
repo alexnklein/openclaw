@@ -7,6 +7,7 @@ import {
   buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
   deliverAgentHarnessUserInputPrompt,
+  formatToolProgressOutput,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
   type AgentHarnessTerminalOutcomeClassification,
@@ -166,6 +167,15 @@ describe("agent harness runtime SDK facade", () => {
     expect(getModelProviderRequestTransport(model)).toEqual({
       auth: { mode: "header", headerName: "x-api-key", value: "secret" },
     });
+  });
+});
+
+describe("formatToolProgressOutput", () => {
+  it("uses a neutral omission suffix for oversized user-facing tool output", () => {
+    const text = formatToolProgressOutput("abcdef", { maxChars: 3 });
+
+    expect(text).toBe("abc\n...[additional output omitted]...");
+    expect(text).not.toContain("...(truncated)...");
   });
 });
 

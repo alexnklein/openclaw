@@ -2037,7 +2037,10 @@ describe("projectRecentChatDisplayMessages", () => {
       {
         role: "assistant",
         content: [
-          { type: "text", text: `${projectedVisibleText.slice(0, 24)}\n...(truncated)...` },
+          {
+            type: "text",
+            text: `${projectedVisibleText.slice(0, 24)}\n...[additional history omitted]...`,
+          },
           {
             type: "attachment",
             attachment: {

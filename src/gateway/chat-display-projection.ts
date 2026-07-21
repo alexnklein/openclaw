@@ -24,7 +24,8 @@ import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
-export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 64_000;
+export const CHAT_HISTORY_TEXT_OMITTED_SUFFIX = "\n...[additional history omitted]...";
 
 type RoleContentMessage = {
   role: string;
@@ -57,7 +58,7 @@ function truncateChatHistoryText(
     return { text, truncated: false };
   }
   return {
-    text: `${text.slice(0, maxChars)}\n...(truncated)...`,
+    text: `${text.slice(0, maxChars)}${CHAT_HISTORY_TEXT_OMITTED_SUFFIX}`,
     truncated: true,
   };
 }

@@ -3900,10 +3900,11 @@ describe("CodexAppServerEventProjector", () => {
     );
 
     expect(onToolResult).toHaveBeenCalledTimes(21);
-    const truncatedOutput = mockCallArg(onToolResult, 19, 0, "onToolResult") as {
+    const omittedOutput = mockCallArg(onToolResult, 19, 0, "onToolResult") as {
       text?: string;
     };
-    expect(truncatedOutput.text).toContain("...(truncated)...");
+    expect(omittedOutput.text).toContain("...[additional output omitted]...");
+    expect(omittedOutput.text).not.toContain("...(truncated)...");
     expect(JSON.stringify(onToolResult.mock.calls)).not.toContain(
       "final output should not duplicate",
     );
