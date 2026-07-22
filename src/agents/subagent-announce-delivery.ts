@@ -1031,6 +1031,27 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
   return undefined;
 }
 
+function resolveTerminalTextCompletionFailure(events: readonly AgentInternalEvent[] | undefined) {
+  for (let index = (events?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const event = events?.[index];
+    if (event?.type !== "task_completion" || event.source !== "subagent") {
+      continue;
+    }
+    if (event.status === "ok") {
+      continue;
+    }
+    const taskLabel = event.taskLabel.trim() || "worker task";
+    const statusLabel = event.statusLabel.trim() || event.status;
+    const result = stripEdgeProgressSentinels(event.result).trim();
+    const summary = `blocked: ${taskLabel} ${statusLabel}.`;
+    if (result && result !== "(no output)") {
+      return `${summary}\n${result}`;
+    }
+    return `${summary}\nNo terminal worker output was captured.`;
+  }
+  return undefined;
+}
+
 function hasFailedSubagentNoOutputCompletion(events: readonly AgentInternalEvent[] | undefined) {
   return (
     events?.some(
@@ -1043,7 +1064,7 @@ function hasFailedSubagentNoOutputCompletion(events: readonly AgentInternalEvent
   );
 }
 
-async function deliverTextCompletionDirect(params: {
+async function deliverTextDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
   directIdempotencyKey: string;
@@ -1054,12 +1075,11 @@ async function deliverTextCompletionDirect(params: {
     accountId?: string;
     threadId?: string;
   };
-  internalEvents?: readonly AgentInternalEvent[];
+  content: string | undefined;
   allowThreadTarget?: boolean;
+  idempotencySuffix: string;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const content = stripEdgeProgressSentinels(
-    resolveTextCompletionDirectFallback(params.internalEvents) ?? "",
-  ).trim();
+  const content = stripEdgeProgressSentinels(params.content ?? "").trim();
   if (
     !content ||
     !params.deliveryTarget.deliver ||
@@ -1071,7 +1091,7 @@ async function deliverTextCompletionDirect(params: {
     return undefined;
   }
   const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
-  const idempotencyKey = `${params.directIdempotencyKey}:text-direct`;
+  const idempotencyKey = `${params.directIdempotencyKey}:${params.idempotencySuffix}`;
   try {
     await subagentAnnounceDeliveryDeps.sendMessage({
       cfg: params.cfg,
@@ -1100,6 +1120,48 @@ async function deliverTextCompletionDirect(params: {
       error: `text completion direct delivery failed: ${summarizeDeliveryError(err)}`,
     };
   }
+}
+
+async function deliverTextCompletionDirect(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+  directIdempotencyKey: string;
+  deliveryTarget: {
+    deliver: boolean;
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  };
+  internalEvents?: readonly AgentInternalEvent[];
+  allowThreadTarget?: boolean;
+}): Promise<SubagentAnnounceDeliveryResult | undefined> {
+  return await deliverTextDirect({
+    ...params,
+    content: resolveTextCompletionDirectFallback(params.internalEvents),
+    idempotencySuffix: "text-direct",
+  });
+}
+
+async function deliverTerminalTextCompletionFailureDirect(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+  directIdempotencyKey: string;
+  deliveryTarget: {
+    deliver: boolean;
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  };
+  internalEvents?: readonly AgentInternalEvent[];
+  allowThreadTarget?: boolean;
+}): Promise<SubagentAnnounceDeliveryResult | undefined> {
+  return await deliverTextDirect({
+    ...params,
+    content: resolveTerminalTextCompletionFailure(params.internalEvents),
+    idempotencySuffix: "terminal-failure-direct",
+  });
 }
 
 function resolveGeneratedMediaDirectFallbackUrls(params: {
@@ -1383,8 +1445,18 @@ async function sendSubagentAnnounceDirectly(params: {
         internalEvents: params.internalEvents,
         allowThreadTarget: true,
       });
+      const terminalFailureResult =
+        directResult ??
+        (await deliverTerminalTextCompletionFailureDirect({
+          cfg,
+          requesterSessionKey: canonicalRequesterSessionKey,
+          directIdempotencyKey: params.directIdempotencyKey,
+          deliveryTarget,
+          internalEvents: params.internalEvents,
+          allowThreadTarget: true,
+        }));
       return (
-        directResult ?? {
+        terminalFailureResult ?? {
           delivered: false,
           path: "direct",
           reason: "visible_reply_missing",

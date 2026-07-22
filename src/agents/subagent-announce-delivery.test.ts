@@ -4884,6 +4884,83 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("delivers durable ingress worker timeouts directly to the exact Telegram topic", async () => {
+    const callGateway = createGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    testing.setDepsForTest({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session",
+        isActive: true,
+      }),
+      getRuntimeConfig: () => ({}),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:telegram:group:-1003871627242:topic:6823",
+      targetRequesterSessionKey: "agent:main:telegram:group:-1003871627242:topic:6823",
+      triggerMessage: "child timed out",
+      steerMessage: "child timed out",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: 6823,
+      },
+      completionDirectOrigin: {
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: 6823,
+      },
+      directOrigin: {
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: 6823,
+      },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      deliverResultDirectly: true,
+      directIdempotencyKey: "flow-1:worker-timeout:terminal",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:worker",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "PR 653 continuation",
+          status: "timeout",
+          statusLabel: "timed out",
+          result: "(no output)",
+          replyInstruction: "unused",
+        },
+      ],
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:-1003871627242",
+        accountId: "bot-1",
+        threadId: "6823",
+        content: [
+          "blocked: PR 653 continuation timed out.",
+          "No terminal worker output was captured.",
+        ].join("\n"),
+        idempotencyKey: "flow-1:worker-timeout:terminal:terminal-failure-direct",
+      }),
+    );
+  });
+
   it("requires message-tool delivery for direct subagent completions", async () => {
     const callGateway = createGatewayMock({
       result: {
