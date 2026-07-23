@@ -170,7 +170,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       ...createHookCtx(),
       SenderId: "telegram-user-1",
       OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:chat-1",
+      OriginatingTo: "telegram:-1003755488173",
+      MessageThreadId: "2",
       // Production inbound normalization always supplies this object for
       // ordinary messages. A truthiness check here would silently disable
       // durable ingress ownership on every real channel turn.
@@ -218,15 +219,24 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         completionOwnerKey: "agent:test:session",
         agentChannel: ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
         agentTo: ctx.OriginatingTo ?? ctx.To ?? ctx.From,
+        agentThreadId: ctx.MessageThreadId,
       });
       expect(workerContext.parentFlowId).toEqual(expect.any(String));
-      expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(mocks.routeReply).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: expect.stringContaining("Supervised worker agent:test:subagent:durable-worker"),
-          isStatusNotice: true,
+          payload: expect.objectContaining({
+            text: expect.stringContaining("Supervised worker agent:test:subagent:durable-worker"),
+            isStatusNotice: true,
+          }),
+          channel: "telegram",
+          to: "telegram:-1003755488173",
+          threadId: "2",
+          replyKind: "final",
         }),
       );
-      expect(result.queuedFinal).toBe(false);
+      expect(result.queuedFinal).toBe(true);
+      expect(result.counts.final).toBe(1);
     } finally {
       ingressObjectiveMocks.begin.mockImplementation(actualBeginIngressObjective);
     }

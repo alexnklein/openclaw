@@ -80,6 +80,12 @@ describe("Z.ai vendor error codes (#48988)", () => {
       expect(isRateLimitErrorMessage("rate limit exceeded")).toBe(true);
     });
 
+    it("classifies local proxy concurrency saturation as rate limiting", () => {
+      expect(
+        classifyFailoverReason("503 Server busy — 3 concurrent requests already in progress"),
+      ).toBe("rate_limit");
+    });
+
     it("OpenAI model-capacity text is classified as overloaded", () => {
       expect(
         isOverloadedErrorMessage("Selected model is at capacity. Please try a different model."),

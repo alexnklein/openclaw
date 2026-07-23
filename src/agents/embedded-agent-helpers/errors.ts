@@ -866,7 +866,7 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("model_not_found");
   }
   if (status === 503) {
-    if (messageReason === "overloaded") {
+    if (messageReason === "overloaded" || messageReason === "rate_limit") {
       return messageClassification;
     }
     return toReasonClassification("timeout");

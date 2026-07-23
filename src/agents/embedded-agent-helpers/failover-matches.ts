@@ -71,6 +71,7 @@ const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
     /too many (?:concurrent )?requests/i,
+    /server busy[\s\S]*concurrent requests?|concurrent requests? (?:already )?in progress/i,
     /throttling(?:exception)?/i,
     "model_cooldown",
     "exceeded your current quota",

@@ -106,6 +106,33 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies local proxy concurrency saturation payloads as fallback-worthy", () => {
+    const rawError = "503 Server busy — 3 concurrent requests already in progress";
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "hc-codex",
+      model: "gpt-5.5",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: rawError,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `hc-codex/gpt-5.5 ended with a provider error: ${rawError}`,
+      reason: "rate_limit",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
   it("classifies generic external runner failure text as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",

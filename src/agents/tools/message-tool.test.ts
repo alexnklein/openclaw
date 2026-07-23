@@ -1522,6 +1522,45 @@ describe("message tool agent routing", () => {
     expect(call?.toolContext?.replyToMode).toBe("all");
   });
 
+  it("uses transferred worker origin as the default Telegram topic send target", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:-1003755488173" });
+    const plugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "test",
+      actions: ["send"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:test:subagent:durable-worker",
+      config: {} as never,
+      agentChannel: "telegram",
+      agentTo: "telegram:-1003755488173",
+      agentThreadId: "2",
+    }).find((candidate) => candidate.name === "message");
+
+    if (!tool) {
+      throw new Error("message tool not found");
+    }
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "telegram",
+      message: "completion returns to topic",
+    });
+
+    const call = firstRunMessageActionInput();
+    expect(call?.toolContext).toMatchObject({
+      currentChannelId: "telegram:-1003755488173",
+      currentMessagingTarget: "telegram:-1003755488173",
+      currentChannelProvider: "telegram",
+      currentThreadTs: "2",
+      replyToMode: "all",
+    });
+  });
+
   it("forwards the routable target through createOpenClawTools to the message tool", async () => {
     mockSendResult({ channel: "slack", to: "user:U123" });
     const plugin = createChannelPlugin({

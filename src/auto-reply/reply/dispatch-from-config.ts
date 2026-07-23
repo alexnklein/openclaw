@@ -1848,6 +1848,30 @@ export async function dispatchReplyFromConfig(
   const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
     result.ok && result.suppressed !== true;
 
+  const sendIngressHandoffReceipt = async (
+    payload: ReplyPayload,
+  ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+    const result = await routeReplyToOriginating(payload, { kind: "final" });
+    if (result) {
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-from-config: route-reply (ingress handoff) failed: ${
+            result.error ?? "unknown error"
+          }`,
+        );
+      }
+      return {
+        queuedFinal: result.ok,
+        routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+      };
+    }
+    markInboundDedupeReplayUnsafe();
+    return {
+      queuedFinal: dispatcher.sendFinalReply(payload),
+      routedFinalCount: 0,
+    };
+  };
+
   /**
    * Helper to send a payload via route-reply (async).
    * Only used when actually routing to a different provider.
@@ -2155,10 +2179,10 @@ export async function dispatchReplyFromConfig(
       return finishReplyOperationAbortedDispatch();
     }
     completeDispatchReplyOperation();
-    const failHandoff = (reason: string) => {
+    const failHandoff = async (reason: string) => {
       objective.fail(new Error(reason));
       markInboundDedupeReplayUnsafe();
-      dispatcher.sendToolResult({
+      const blockedReceipt = await sendIngressHandoffReceipt({
         text: `blocked: ${reason}. Durable task ${objective.flowId} is waiting at a safe checkpoint; no worker is running.`,
         isError: true,
         isStatusNotice: true,
@@ -2167,9 +2191,11 @@ export async function dispatchReplyFromConfig(
       recordAgentDispatchCompleted("error", { error: reason });
       recordProcessed("error", { error: reason });
       markIdle("message_error");
+      const counts = dispatcher.getQueuedCounts();
+      counts.final += blockedReceipt.routedFinalCount;
       return attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
+        queuedFinal: blockedReceipt.queuedFinal,
+        counts,
       });
     };
     if (!objective.isHandoffSafe()) {
@@ -2200,10 +2226,10 @@ export async function dispatchReplyFromConfig(
           agentSessionKey: ingressOwnerSessionKey,
           completionOwnerKey: ingressOwnerSessionKey,
           parentFlowId: objective.flowId,
-          agentChannel: ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
-          agentAccountId: ctx.AccountId,
-          agentTo: ctx.OriginatingTo ?? ctx.To ?? ctx.From,
-          agentThreadId: ctx.MessageThreadId,
+          agentChannel: routeReplyChannel ?? ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
+          agentAccountId: routedReplyAccountId ?? replyContextAccountId ?? ctx.AccountId,
+          agentTo: routeReplyTo ?? ctx.OriginatingTo ?? ctx.To ?? ctx.From,
+          agentThreadId: routeReplyThreadId ?? ctx.MessageThreadId ?? ctx.TransportThreadId,
           inheritedToolAllowlist: params.replyOptions?.toolsAllow,
         },
       );
@@ -2226,7 +2252,7 @@ export async function dispatchReplyFromConfig(
       })
     ) {
       markInboundDedupeReplayUnsafe();
-      dispatcher.sendToolResult({
+      const metadataFailureReceipt = await sendIngressHandoffReceipt({
         text: `Supervised worker ${workerResult.childSessionKey} is running under task ${objective.flowId}, but its flow metadata annotation failed. Completion delivery remains registered here.`,
         isError: true,
         isStatusNotice: true,
@@ -2235,13 +2261,15 @@ export async function dispatchReplyFromConfig(
       recordAgentDispatchCompleted("error", { error: "ingress worker metadata annotation failed" });
       recordProcessed("error", { error: "ingress worker metadata annotation failed" });
       markIdle("message_error");
+      const counts = dispatcher.getQueuedCounts();
+      counts.final += metadataFailureReceipt.routedFinalCount;
       return attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
+        queuedFinal: metadataFailureReceipt.queuedFinal,
+        counts,
       });
     }
     markInboundDedupeReplayUnsafe();
-    dispatcher.sendToolResult({
+    const handoffReceipt = await sendIngressHandoffReceipt({
       text: `Still working as durable task ${objective.flowId}. Supervised worker ${workerResult.childSessionKey} now owns it; completion will return here.`,
       isStatusNotice: true,
     });
@@ -2249,9 +2277,11 @@ export async function dispatchReplyFromConfig(
     recordAgentDispatchCompleted("completed");
     recordProcessed("completed", { reason: "ingress_worker_handoff" });
     markIdle("message_completed");
+    const counts = dispatcher.getQueuedCounts();
+    counts.final += handoffReceipt.routedFinalCount;
     return attachSourceReplyDeliveryMode({
-      queuedFinal: false,
-      counts: dispatcher.getQueuedCounts(),
+      queuedFinal: handoffReceipt.queuedFinal,
+      counts,
     });
   };
   let pluginFallbackReason:
