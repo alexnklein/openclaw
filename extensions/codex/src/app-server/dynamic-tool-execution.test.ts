@@ -397,6 +397,18 @@ describe("dynamic tool execution helpers", () => {
         pendingOpenClawDynamicToolCompletionIdsCount: 1,
       }),
     ).toBe(false);
+    expect(
+      shouldReleaseTurnAfterTerminalDynamicTool({
+        completed: false,
+        aborted: false,
+        toolName: "message",
+        responseSuccess: true,
+        currentTurnHadNonTerminalDynamicToolResult: false,
+        activeAppServerTurnRequests: 0,
+        activeTurnItemIdsCount: 0,
+        pendingOpenClawDynamicToolCompletionIdsCount: 0,
+      }),
+    ).toBe(false);
   });
 
   it("resolves terminal dynamic tool batch state", () => {
@@ -448,6 +460,15 @@ describe("dynamic tool execution helpers", () => {
         contentItems: [{ type: "inputText", text: "regular output" }],
         success: true,
       }),
+    ).toBe(true);
+    expect(
+      shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
+        {
+          contentItems: [{ type: "inputText", text: "Telegram message sent." }],
+          success: true,
+        },
+        { tool: "message" },
+      ),
     ).toBe(true);
   });
 });

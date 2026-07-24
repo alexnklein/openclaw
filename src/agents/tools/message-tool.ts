@@ -10,7 +10,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
-import { createAbortError } from "../../infra/abort-signal.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -45,6 +44,7 @@ import {
   getBootEchoContextForSession,
   stripBootEchoFromOutboundText,
 } from "../../gateway/boot-echo-guard.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
@@ -224,6 +224,69 @@ function resolvePollVoteEchoRoute(params: {
   // A route mismatch fails open; provider/account keys prevent cross-send suppression.
   const routeTarget = !target || currentTargets.has(target) ? "<current-source>" : target;
   return `${channel}\0${normalizeAccountId(params.accountId ?? "default")}\0${routeTarget}`;
+}
+
+const TELEGRAM_TOPIC_TARGET_PATTERN = /:(?:topic|thread):/iu;
+
+function normalizeTelegramSupergroupTarget(value: unknown): string | undefined {
+  const raw = normalizeOptionalStringifiedId(value);
+  if (!raw) {
+    return undefined;
+  }
+  const withoutChannel = raw.startsWith("telegram:") ? raw.slice("telegram:".length) : raw;
+  const base = withoutChannel.split(/:(?:topic|thread):/iu)[0]?.trim();
+  return base?.startsWith("-100") ? base : undefined;
+}
+
+function readMessageToolExplicitTargets(params: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  for (const key of ["target", "to", "channelId"]) {
+    const value = normalizeOptionalStringifiedId(params[key]);
+    if (value) {
+      values.push(value);
+    }
+  }
+  const targets = params.targets;
+  if (Array.isArray(targets)) {
+    for (const target of targets) {
+      const value = normalizeOptionalStringifiedId(target);
+      if (value) {
+        values.push(value);
+      }
+    }
+  }
+  return values;
+}
+
+function assertTelegramForumTopicTargetIsThreaded(params: {
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+  channel?: string;
+  currentTarget?: string;
+  currentThreadTs?: string;
+}) {
+  if (
+    params.action !== "send" ||
+    normalizeMessageChannel(params.channel) !== "telegram" ||
+    !normalizeOptionalString(params.currentThreadTs) ||
+    normalizeOptionalStringifiedId(params.args.threadId)
+  ) {
+    return;
+  }
+  const currentGroup = normalizeTelegramSupergroupTarget(params.currentTarget);
+  if (!currentGroup) {
+    return;
+  }
+  for (const target of readMessageToolExplicitTargets(params.args)) {
+    if (TELEGRAM_TOPIC_TARGET_PATTERN.test(target)) {
+      continue;
+    }
+    if (normalizeTelegramSupergroupTarget(target) === currentGroup) {
+      throw new Error(
+        "Telegram forum-topic sends to the current supergroup require threadId; omit target to use the current topic or pass threadId explicitly.",
+      );
+    }
+  }
 }
 
 function sanitizeUserVisibleToolTextResult(
@@ -1419,6 +1482,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           }
         }
       }
+      assertTelegramForumTopicTargetIsThreaded({
+        action,
+        args: params,
+        channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
+        currentTarget:
+          effectiveCurrentChannel.currentMessagingTarget ??
+          effectiveCurrentChannel.currentChannelId,
+        currentThreadTs,
+      });
 
       const gatewayResolved = resolveGatewayOptions(gatewayOpts);
       const gateway = {

@@ -41,6 +41,7 @@ vi.mock("../../tasks/ingress-objective.js", async (importOriginal) => {
 });
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
+let INGRESS_LIVENESS_RECEIPT_DELAY_MS: typeof import("./dispatch-from-config.js").INGRESS_LIVENESS_RECEIPT_DELAY_MS;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
@@ -71,7 +72,8 @@ function firstReplyDispatchCall() {
 
 describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   beforeAll(async () => {
-    ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+    ({ dispatchReplyFromConfig, INGRESS_LIVENESS_RECEIPT_DELAY_MS } =
+      await import("./dispatch-from-config.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     const replyRunRegistryModule = await import("./reply-run-registry.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
@@ -239,6 +241,84 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(result.counts.final).toBe(1);
     } finally {
       ingressObjectiveMocks.begin.mockImplementation(actualBeginIngressObjective);
+    }
+  });
+
+  it("sends an early topic-scoped liveness receipt before durable handoff", async () => {
+    vi.useFakeTimers();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+    const ctx = {
+      ...createHookCtx(),
+      Body: "slow liveness turn",
+      BodyForAgent: "slow liveness turn",
+      BodyForCommands: "slow liveness turn",
+      CommandBody: "slow liveness turn",
+      RawBody: "slow liveness turn",
+      SenderId: "telegram-user-liveness",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:-1003755488173",
+      MessageThreadId: "2",
+      ChatType: "group",
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false as const,
+        body: "slow liveness turn",
+      },
+    };
+    let releaseResolver: () => void = () => {};
+    const resolverGate = new Promise<void>((resolve) => {
+      releaseResolver = resolve;
+    });
+
+    try {
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { sourceReplyDeliveryMode: "automatic" },
+        replyResolver: async () => {
+          await resolverGate;
+          return { text: "done" };
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(INGRESS_LIVENESS_RECEIPT_DELAY_MS - 1);
+      expect(mocks.routeReply).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            text: "Working on it. I'll send the result here when it's ready.",
+            isStatusNotice: true,
+          }),
+          channel: "telegram",
+          to: "telegram:-1003755488173",
+          threadId: "2",
+          replyKind: "tool",
+        }),
+      );
+
+      releaseResolver();
+      const result = await dispatch;
+
+      expect(result.queuedFinal).toBe(true);
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({ text: "done" }),
+          channel: "telegram",
+          to: "telegram:-1003755488173",
+          threadId: "2",
+          replyKind: "final",
+        }),
+      );
+    } finally {
+      releaseResolver();
+      vi.useRealTimers();
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
     }
   });
 

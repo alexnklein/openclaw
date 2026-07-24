@@ -7,7 +7,10 @@ import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-age
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation as createRegistryReplyOperation,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -256,7 +259,7 @@ vi.mock("./reply-media-paths.runtime.js", async (importOriginal) => {
 
 const { runReplyAgent } = await import("./agent-runner.js");
 
-function createReplyOperation(): ReplyOperation {
+function createStubReplyOperation(): ReplyOperation {
   return {
     result: undefined,
     setPhase: vi.fn(),
@@ -311,7 +314,7 @@ function makeRunReplyAgentParams(
     resolvedBlockStreamingBreak: "message_end",
     shouldInjectGroupIntro: false,
     typingMode: "instant",
-    replyOperation: createReplyOperation(),
+    replyOperation: createStubReplyOperation(),
     ...overrides,
   };
 }
@@ -433,6 +436,41 @@ describe("runReplyAgent media path normalization", () => {
         steeringMode: "all",
       },
     );
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("steers active reply-operation backends before falling back to embedded steering", async () => {
+    const queueMessage = vi.fn(async () => {});
+    const operation = createRegistryReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      isStreaming: () => false,
+      isStopped: () => false,
+      queueMessage,
+    });
+    operation.setPhase("running");
+
+    try {
+      await runReplyAgent(
+        makeRunReplyAgentParams({
+          resolvedQueue: { mode: "steer" } as QueueSettings,
+          shouldSteer: true,
+          shouldFollowup: true,
+          isActive: true,
+          isStreaming: false,
+        }),
+      );
+    } finally {
+      operation.complete();
+    }
+
+    expect(queueMessage).toHaveBeenCalledWith("generate chart");
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 

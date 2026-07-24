@@ -1820,6 +1820,49 @@ describe("message tool Telegram topic targets", () => {
     expect(call?.params?.threadId).toBe("42");
     expect(call?.params?.message).toBe("topic hello");
   });
+
+  it("rejects explicit current-supergroup sends that would drop the ambient topic", async () => {
+    mockSendResult({ to: "telegram:-1001234567890" });
+
+    const tool = createMessageTool({
+      currentChannelProvider: "telegram",
+      currentChannelId: "telegram:-1001234567890",
+      currentMessagingTarget: "telegram:-1001234567890",
+      currentThreadTs: "42",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await expect(
+      tool.execute("1", {
+        action: "send",
+        channel: "telegram",
+        target: "telegram:-1001234567890",
+        message: "would escape the topic",
+      }),
+    ).rejects.toThrow(/require threadId/i);
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit current-supergroup sends when threadId is supplied", async () => {
+    mockSendResult({ to: "telegram:-1001234567890" });
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001234567890",
+        currentMessagingTarget: "telegram:-1001234567890",
+        currentThreadTs: "42",
+      },
+      action: {
+        channel: "telegram",
+        target: "telegram:-1001234567890",
+        threadId: "42",
+        message: "stays in topic",
+      },
+    });
+
+    expect(call?.params?.threadId).toBe("42");
+  });
 });
 
 describe("message tool schema scoping", () => {

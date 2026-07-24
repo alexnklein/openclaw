@@ -301,6 +301,7 @@ type TerminalToolExecutionDiagnostic = Extract<
 type TerminalDynamicToolReleaseState = {
   completed: boolean;
   aborted: boolean;
+  toolName?: string;
   responseSuccess: boolean;
   currentTurnHadNonTerminalDynamicToolResult: boolean;
   activeAppServerTurnRequests: number;
@@ -315,6 +316,7 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
   return (
     !state.completed &&
     !state.aborted &&
+    state.toolName !== "message" &&
     state.responseSuccess &&
     !state.currentTurnHadNonTerminalDynamicToolResult &&
     state.activeAppServerTurnRequests === 0 &&
@@ -326,7 +328,13 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
 /** Returns true when a non-async result should block terminal-release shortcuts. */
 export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
   response: CodexDynamicToolCallResponse,
+  call?: Pick<CodexDynamicToolCallParams, "tool">,
 ): boolean {
+  // Source-channel sends/edits are part of the visible Progress UX. They must
+  // never shortcut the Codex turn before the model can keep working or finish.
+  if (call?.tool === "message") {
+    return true;
+  }
   return response.asyncStarted !== true;
 }
 

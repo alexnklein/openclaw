@@ -1783,6 +1783,7 @@ export async function runCodexAppServerAttempt(
       !shouldReleaseTurnAfterTerminalDynamicTool({
         completed,
         aborted: runAbortController.signal.aborted,
+        toolName: paramsValue.call.tool,
         responseSuccess: paramsValue.response.success,
         currentTurnHadNonTerminalDynamicToolResult,
         activeAppServerTurnRequests,
@@ -2534,7 +2535,7 @@ export async function runCodexAppServerAttempt(
             response,
             durationMs: toolDurationMs,
           });
-        } else if (!shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(response)) {
+        } else if (!shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(response, call)) {
           scheduleTerminalDynamicToolReleaseCheck();
         } else {
           currentTurnHadNonTerminalDynamicToolResult = true;

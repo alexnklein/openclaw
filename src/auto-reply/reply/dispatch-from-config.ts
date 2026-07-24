@@ -336,6 +336,9 @@ function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
 }
 
+export const INGRESS_LIVENESS_RECEIPT_DELAY_MS = 5_000;
+const INGRESS_LIVENESS_RECEIPT_TEXT = "Working on it. I'll send the result here when it's ready.";
+
 function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(reply);
   const text = normalizeOptionalString(reply.text);
@@ -2131,6 +2134,7 @@ export async function dispatchReplyFromConfig(
       releaseInboundDedupe(inboundDedupeClaim.key);
     }
   };
+  let disposeIngressLivenessReceipt = () => {};
   const finishReplyOperationBusyDispatch = (opts?: {
     dedupeDisposition?: "commit" | "release";
     recordAgentDispatchCompleted?: boolean;
@@ -2155,6 +2159,7 @@ export async function dispatchReplyFromConfig(
     });
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
+    disposeIngressLivenessReceipt();
     ingressObjective?.cancel("source turn aborted");
     commitInboundDedupeIfClaimed();
     recordProcessed("completed", { reason: "reply_operation_aborted" });
@@ -2174,6 +2179,7 @@ export async function dispatchReplyFromConfig(
   let ingressOwnerSessionKey: string | undefined;
   let ingressHandoffRequested = false;
   const finishIngressHandoffDispatch = async (): Promise<DispatchFromConfigResult> => {
+    disposeIngressLivenessReceipt();
     const objective = ingressObjective;
     if (!objective || !ingressOwnerSessionKey) {
       return finishReplyOperationAbortedDispatch();
@@ -2551,6 +2557,50 @@ export async function dispatchReplyFromConfig(
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied;
     let finalReplyDeliveryStarted = false;
+    let ingressLivenessReceiptTimer: ReturnType<typeof setTimeout> | undefined;
+    let ingressLivenessReceiptDisposed = false;
+    let ingressLivenessReceiptSent = false;
+    disposeIngressLivenessReceipt = () => {
+      ingressLivenessReceiptDisposed = true;
+      if (ingressLivenessReceiptTimer) {
+        clearTimeout(ingressLivenessReceiptTimer);
+        ingressLivenessReceiptTimer = undefined;
+      }
+    };
+    const sendIngressLivenessReceipt = async (): Promise<void> => {
+      if (
+        ingressLivenessReceiptDisposed ||
+        ingressLivenessReceiptSent ||
+        finalReplyDeliveryStarted ||
+        isDispatchOperationAborted()
+      ) {
+        return;
+      }
+      ingressLivenessReceiptSent = true;
+      const payload: ReplyPayload = {
+        text: INGRESS_LIVENESS_RECEIPT_TEXT,
+        isStatusNotice: true,
+      };
+      if (shouldRouteToOriginating) {
+        await sendPayloadAsync(payload, undefined, false, "tool");
+        return;
+      }
+      markInboundDedupeReplayUnsafe();
+      dispatcher.sendToolResult(payload);
+    };
+    const scheduleIngressLivenessReceipt = () => {
+      if (ingressLivenessReceiptTimer || sendPolicyDenied || suppressDelivery) {
+        return;
+      }
+      ingressLivenessReceiptTimer = setTimeout(() => {
+        void sendIngressLivenessReceipt().catch((error) => {
+          logVerbose(
+            `dispatch-from-config: ingress liveness receipt failed: ${formatErrorMessage(error)}`,
+          );
+        });
+      }, INGRESS_LIVENESS_RECEIPT_DELAY_MS);
+      ingressLivenessReceiptTimer.unref?.();
+    };
     const hasExecApprovalPayload = (payload: ReplyPayload) => {
       const execApproval =
         payload.channelData &&
@@ -2920,6 +2970,7 @@ export async function dispatchReplyFromConfig(
         });
       }
       ingressObjective = ingress;
+      scheduleIngressLivenessReceipt();
     }
 
     // When automatic source delivery is suppressed, still let the agent process
@@ -3669,6 +3720,7 @@ export async function dispatchReplyFromConfig(
         ),
       ),
     );
+    disposeIngressLivenessReceipt();
     const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
     notifySessionMetadataChanges(sessionMetadataChanges);
     if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
@@ -3910,6 +3962,7 @@ export async function dispatchReplyFromConfig(
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
     });
   } catch (err) {
+    disposeIngressLivenessReceipt();
     if (isDispatchReplyOperationAbortedError(err)) {
       if (ingressHandoffRequested) {
         return await finishIngressHandoffDispatch();

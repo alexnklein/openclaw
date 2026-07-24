@@ -111,6 +111,7 @@ import {
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
+  queueReplyRunMessage,
   replyRunRegistry,
   runAfterReplyOperationClear,
   type ReplyOperation,
@@ -1272,6 +1273,11 @@ export async function runReplyAgent(params: {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
+    if (queueReplyRunMessage(steerSessionId, followupRun.prompt)) {
+      await touchActiveSessionEntry();
+      typing.cleanup();
+      return undefined;
+    }
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
