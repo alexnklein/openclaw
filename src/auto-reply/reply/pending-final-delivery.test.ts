@@ -23,10 +23,10 @@ describe("sanitizePendingFinalDeliveryText", () => {
     expect(sanitizePendingFinalDeliveryText(text)).toBe("Visible reply");
   });
 
-  it("drops silent reply sentinel payloads", () => {
-    expect(sanitizePendingFinalDeliveryText(" NO_REPLY ")).toBe("");
-    expect(sanitizePendingFinalDeliveryText('"NO_REPLY"')).toBe("");
-    expect(sanitizePendingFinalDeliveryText('{"action":"NO_REPLY"}')).toBe("");
+  it("turns silent reply sentinel payloads into a terminal receipt", () => {
+    expect(sanitizePendingFinalDeliveryText(" NO_REPLY ")).toBe("✓ No reply needed");
+    expect(sanitizePendingFinalDeliveryText('"NO_REPLY"')).toBe("✓ No reply needed");
+    expect(sanitizePendingFinalDeliveryText('{"action":"NO_REPLY"}')).toBe("✓ No reply needed");
   });
 
   it("strips mixed silent reply sentinels like normal delivery", () => {
@@ -38,5 +38,9 @@ describe("sanitizePendingFinalDeliveryText", () => {
 
   it("preserves heartbeat ack text for ack-aware classification", () => {
     expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK short")).toBe("HEARTBEAT_OK short");
+  });
+
+  it("keeps naturally empty pending delivery text empty", () => {
+    expect(sanitizePendingFinalDeliveryText("   ")).toBe("");
   });
 });

@@ -5,6 +5,8 @@ import { escapeRegExp } from "../shared/regexp.js";
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 /** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+/** Visible terminal receipt for addressed turns that intentionally resolve to silent. */
+export const SILENT_REPLY_RECEIPT_TEXT = "✓ No reply needed";
 
 const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
 const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;

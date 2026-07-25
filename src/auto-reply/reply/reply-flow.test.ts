@@ -30,7 +30,7 @@ describe("createReplyDispatcher", () => {
     expect(deliveredText(deliver, 1)).toBe(`interject.${SILENT_REPLY_TOKEN}`);
   });
 
-  it("drops exact NO_REPLY final payloads for direct sessions", async () => {
+  it("sends a terminal receipt for exact NO_REPLY final payloads in direct sessions", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const cfg: OpenClawConfig = {
       agents: {
@@ -51,13 +51,14 @@ describe("createReplyDispatcher", () => {
       },
     });
 
-    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(true);
 
     await dispatcher.waitForIdle();
-    expect(deliver).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliveredText(deliver)).toBe("✓ No reply needed");
   });
 
-  it("still drops exact NO_REPLY final payloads for group sessions where silence is allowed", async () => {
+  it("sends a terminal receipt for exact NO_REPLY final payloads in group sessions", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const cfg: OpenClawConfig = {
       agents: {
@@ -75,6 +76,24 @@ describe("createReplyDispatcher", () => {
         cfg,
         sessionKey: "agent:main:telegram:group:123",
         surface: "telegram",
+      },
+    });
+
+    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(true);
+
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliveredText(deliver)).toBe("✓ No reply needed");
+  });
+
+  it("keeps exact NO_REPLY suppressed for internal dispatcher contexts", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      silentReplyContext: {
+        sessionKey: "agent:main:cron:job:heartbeat",
+        surface: "cron",
+        conversationType: "internal",
       },
     });
 

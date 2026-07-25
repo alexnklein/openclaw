@@ -237,6 +237,19 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("turns exact NO_REPLY into the configured terminal receipt", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: "  NO_REPLY  " },
+      {
+        silentReplyReceiptText: "✓ No reply needed",
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(expectNormalizedReply(result).text).toBe("✓ No reply needed");
+    expect(reasons).toEqual([]);
+  });
+
   it("suppresses exact NO_REPLY payloads prefixed by leaked progress sentinels", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
@@ -261,6 +274,14 @@ describe("normalizeReplyPayload", () => {
     );
     expect(result).toBeNull();
     expect(reasons).toEqual(["silent"]);
+  });
+
+  it("turns JSON NO_REPLY action payloads into the configured terminal receipt", () => {
+    const result = normalizeReplyPayload(
+      { text: '{"action":"NO_REPLY"}' },
+      { silentReplyReceiptText: "✓ No reply needed" },
+    );
+    expect(expectNormalizedReply(result).text).toBe("✓ No reply needed");
   });
 
   it("suppresses quoted NO_REPLY string payloads", () => {

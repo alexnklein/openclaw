@@ -677,6 +677,15 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("rate_limit");
   });
 
+  it("classifies local concurrent-request 503s as overloaded rather than rate-limited", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        503,
+        "Server busy - 2 concurrent requests already in progress",
+      ),
+    ).toBe("overloaded");
+  });
+
   it("classifies HTTP 400 context-overflow payloads without using format", () => {
     expect(
       classifyFailoverReasonFromHttpStatus(

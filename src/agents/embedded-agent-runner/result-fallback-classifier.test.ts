@@ -127,7 +127,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
     expect(result).toEqual({
       message: `hc-codex/gpt-5.5 ended with a provider error: ${rawError}`,
-      reason: "rate_limit",
+      reason: "overloaded",
       code: "embedded_error_payload",
       rawError,
     });

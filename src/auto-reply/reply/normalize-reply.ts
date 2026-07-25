@@ -30,6 +30,7 @@ export type NormalizeReplyOptions = {
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
   silentToken?: string;
+  silentReplyReceiptText?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -49,20 +50,29 @@ export function normalizeReplyPayload(
         trimText: true,
       },
     );
+  const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
+  const silentReplyReceiptText = normalizeOptionalString(opts.silentReplyReceiptText);
   const trimmed = normalizeOptionalString(payload.text) ?? "";
   if (!hasContent(trimmed)) {
+    if (silentReplyReceiptText && isSilentReplyPayloadText(trimmed, silentToken)) {
+      return copyReplyPayloadMetadata(payload, { ...payload, text: silentReplyReceiptText });
+    }
     opts.onSkip?.("empty");
     return null;
   }
 
-  const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyPayloadText(text, silentToken)) {
     if (!hasContent("")) {
-      opts.onSkip?.("silent");
-      return null;
+      if (silentReplyReceiptText) {
+        text = silentReplyReceiptText;
+      } else {
+        opts.onSkip?.("silent");
+        return null;
+      }
+    } else {
+      text = "";
     }
-    text = "";
   }
   // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
   // token never leaks to end users.  If stripping leaves nothing, treat it as
@@ -75,8 +85,12 @@ export function normalizeReplyPayload(
     if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
       text = stripSilentToken(text, silentToken);
       if (!hasContent(text)) {
-        opts.onSkip?.("silent");
-        return null;
+        if (silentReplyReceiptText) {
+          text = silentReplyReceiptText;
+        } else {
+          opts.onSkip?.("silent");
+          return null;
+        }
       }
     }
   }

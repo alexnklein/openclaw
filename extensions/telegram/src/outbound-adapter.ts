@@ -309,6 +309,22 @@ export function createTelegramOutboundAdapter(
         gatewayClientScopes,
       });
     },
+    editText: async ({ cfg, target, messageId, text, formatting, gatewayClientScopes }) => {
+      const { editMessageTelegram } = await loadSendModule();
+      const outboundTo = normalizeTelegramOutboundTarget(target.to);
+      const editTarget = parseTelegramTarget(outboundTo);
+      const result = await editMessageTelegram(editTarget.chatId, messageId, text, {
+        cfg,
+        accountId: target.accountId ?? undefined,
+        verbose: false,
+        ...(formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
+        gatewayClientScopes,
+      });
+      return attachChannelToResult("telegram", {
+        messageId: result.messageId,
+        chatId: result.chatId,
+      });
+    },
     resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
       typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
     pollMaxOptions: TELEGRAM_POLL_OPTION_LIMIT,

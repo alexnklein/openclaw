@@ -103,6 +103,8 @@ type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** Previous provider message id to edit for transient routed status receipts. */
+  previousMessageId?: string;
 };
 
 type RouteReplyResult = {
@@ -137,6 +139,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
   const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
   const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
+  const outbound = loadedPlugin?.outbound ?? bundledPlugin?.outbound;
   const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
   const resolvedAgentId = params.sessionKey
     ? resolveSessionAgentId({
@@ -259,6 +262,25 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   };
 
   try {
+    const previousMessageId = params.previousMessageId?.trim();
+    if (previousMessageId && outbound?.editText && mediaUrls.length === 0 && !hasChannelData) {
+      try {
+        const edited = await outbound.editText({
+          cfg,
+          target: {
+            channel: channelId,
+            to,
+            ...(accountId ? { accountId } : {}),
+            ...(resolvedThreadId != null ? { threadId: resolvedThreadId } : {}),
+          },
+          messageId: previousMessageId,
+          text,
+        });
+        return { ok: true, messageId: edited.messageId ?? previousMessageId };
+      } catch {
+        // Editing transient progress is best-effort; fall through to durable send.
+      }
+    }
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
     const { sendDurableMessageBatch } = await loadDeliverRuntime();

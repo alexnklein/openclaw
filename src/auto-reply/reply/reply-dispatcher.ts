@@ -4,10 +4,13 @@ import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import {
+  classifySilentReplyConversationType,
+  type SilentReplyConversationType,
+} from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../reply-payload.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_RECEIPT_TEXT, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
@@ -88,6 +91,22 @@ function getHumanDelayMax(config: HumanDelayConfig | undefined): number {
   return max <= min ? min : max;
 }
 
+function resolveSilentReplyReceiptText(
+  context: ReplyDispatcherOptions["silentReplyContext"] | undefined,
+): string | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const conversationType = classifySilentReplyConversationType({
+    sessionKey: context.sessionKey,
+    surface: context.surface,
+    conversationType: context.conversationType,
+  });
+  return conversationType === "direct" || conversationType === "group"
+    ? SILENT_REPLY_RECEIPT_TEXT
+    : undefined;
+}
+
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   silentReplyContext?: {
@@ -147,6 +166,7 @@ type NormalizeReplyPayloadInternalOptions = Pick<
   | "onHeartbeatStrip"
   | "transformReplyPayload"
 > & {
+  silentReplyReceiptText?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -161,6 +181,7 @@ function normalizeReplyPayloadInternal(
     responsePrefix: opts.responsePrefix,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
+    silentReplyReceiptText: opts.silentReplyReceiptText,
     transformReplyPayload: opts.transformReplyPayload,
     onSkip: opts.onSkip,
   });
@@ -207,6 +228,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       responsePrefixContextProvider: options.responsePrefixContextProvider,
       transformReplyPayload: options.transformReplyPayload,
       onHeartbeatStrip: options.onHeartbeatStrip,
+      silentReplyReceiptText:
+        kind === "final" ? resolveSilentReplyReceiptText(options.silentReplyContext) : undefined,
       onSkip: (reason) =>
         options.onSkip?.(payload, {
           ...buildReplyDispatchRuntimeInfo(payload, kind),

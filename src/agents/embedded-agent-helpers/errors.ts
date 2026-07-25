@@ -1020,6 +1020,10 @@ function isOpenRouterKeyBudgetLimitExceededError(raw: string, provider?: string)
   );
 }
 
+function isLocalConcurrencyBusyMessage(raw: string): boolean {
+  return /\bserver busy\b[\s\S]*\bconcurrent requests?\b[\s\S]*\bin progress\b/i.test(raw);
+}
+
 function isExactUnknownNoDetailsError(raw: string): boolean {
   return (
     normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
@@ -1062,6 +1066,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
+  }
+  if (isLocalConcurrencyBusyMessage(raw)) {
+    return toReasonClassification("overloaded");
   }
   if (isRateLimitErrorMessage(raw)) {
     return toReasonClassification("rate_limit");

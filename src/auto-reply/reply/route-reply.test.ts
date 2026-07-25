@@ -1,6 +1,7 @@
 // Tests routeReply delivery decisions across channels and fallback paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ChannelOutboundAdapter,
   ChannelMessagingAdapter,
   ChannelPlugin,
   ChannelThreadingAdapter,
@@ -125,6 +126,7 @@ function createChannelPlugin(
   id: ChannelPlugin["id"],
   options: {
     messaging?: ChannelMessagingAdapter;
+    outbound?: ChannelOutboundAdapter;
     threading?: ChannelThreadingAdapter;
     label?: string;
   } = {},
@@ -136,6 +138,7 @@ function createChannelPlugin(
       config: { listAccountIds: () => [], resolveAccount: () => ({}) },
     }),
     ...(options.messaging ? { messaging: options.messaging } : {}),
+    ...(options.outbound ? { outbound: options.outbound } : {}),
     ...(options.threading ? { threading: options.threading } : {}),
   };
 }
@@ -246,6 +249,88 @@ describe("routeReply", () => {
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry());
+  });
+
+  it("edits routed status text when a previous provider message id is supplied", async () => {
+    const editText = vi.fn(async () => ({
+      channel: "telegram",
+      messageId: "progress-1",
+      chatId: "-1001",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createChannelPlugin("telegram", {
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              editText,
+            },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const res = await routeReply({
+      payload: { text: "Still working", isStatusNotice: true },
+      channel: "telegram",
+      to: "-1001",
+      threadId: "2",
+      cfg: {} as never,
+      previousMessageId: "progress-1",
+    });
+
+    expect(res).toEqual({ ok: true, messageId: "progress-1" });
+    expect(editText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "progress-1",
+        text: "Still working",
+        target: expect.objectContaining({
+          channel: "telegram",
+          to: "-1001",
+          threadId: "2",
+        }),
+      }),
+    );
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("falls back to normal routed delivery when a status edit fails", async () => {
+    const editText = vi.fn(async () => {
+      throw new Error("message is not modified");
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createChannelPlugin("telegram", {
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              editText,
+            },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+    mocks.deliverOutboundPayloads.mockResolvedValueOnce([
+      { channel: "telegram", messageId: "new-progress", chatId: "-1001" },
+    ]);
+
+    const res = await routeReply({
+      payload: { text: "Still working", isStatusNotice: true },
+      channel: "telegram",
+      to: "-1001",
+      cfg: {} as never,
+      previousMessageId: "progress-1",
+    });
+
+    expect(res).toEqual({ ok: true, messageId: "new-progress" });
+    expect(editText).toHaveBeenCalledOnce();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
   });
 
   it("skips sends when abort signal is already aborted", async () => {

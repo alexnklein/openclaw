@@ -1811,7 +1811,12 @@ export async function dispatchReplyFromConfig(
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
+    options?: {
+      abortSignal?: AbortSignal;
+      mirror?: boolean;
+      kind?: ReplyDispatchKind;
+      previousMessageId?: string;
+    },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
@@ -1845,6 +1850,7 @@ export async function dispatchReplyFromConfig(
       groupId,
       replyKind: options?.kind ?? "final",
       runId: turnRunId,
+      previousMessageId: options?.previousMessageId,
     });
   };
 
@@ -1853,8 +1859,12 @@ export async function dispatchReplyFromConfig(
 
   const sendIngressHandoffReceipt = async (
     payload: ReplyPayload,
-  ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-    const result = await routeReplyToOriginating(payload, { kind: "final" });
+    options?: { previousMessageId?: string },
+  ): Promise<{ queuedFinal: boolean; routedFinalCount: number; messageId?: string }> => {
+    const result = await routeReplyToOriginating(payload, {
+      kind: "final",
+      previousMessageId: options?.previousMessageId,
+    });
     if (result) {
       if (!result.ok) {
         logVerbose(
@@ -1866,6 +1876,7 @@ export async function dispatchReplyFromConfig(
       return {
         queuedFinal: result.ok,
         routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+        ...(result.messageId ? { messageId: result.messageId } : {}),
       };
     }
     markInboundDedupeReplayUnsafe();
@@ -2135,6 +2146,7 @@ export async function dispatchReplyFromConfig(
     }
   };
   let disposeIngressLivenessReceipt = () => {};
+  let ingressLivenessReceiptMessageId: string | undefined;
   const finishReplyOperationBusyDispatch = (opts?: {
     dedupeDisposition?: "commit" | "release";
     recordAgentDispatchCompleted?: boolean;
@@ -2275,10 +2287,13 @@ export async function dispatchReplyFromConfig(
       });
     }
     markInboundDedupeReplayUnsafe();
-    const handoffReceipt = await sendIngressHandoffReceipt({
-      text: `Still working as durable task ${objective.flowId}. Supervised worker ${workerResult.childSessionKey} now owns it; completion will return here.`,
-      isStatusNotice: true,
-    });
+    const handoffReceipt = await sendIngressHandoffReceipt(
+      {
+        text: `Still working as durable task ${objective.flowId}. Supervised worker ${workerResult.childSessionKey} now owns it; completion will return here.`,
+        isStatusNotice: true,
+      },
+      { previousMessageId: ingressLivenessReceiptMessageId },
+    );
     commitInboundDedupeIfClaimed();
     recordAgentDispatchCompleted("completed");
     recordProcessed("completed", { reason: "ingress_worker_handoff" });
@@ -2582,7 +2597,21 @@ export async function dispatchReplyFromConfig(
         isStatusNotice: true,
       };
       if (shouldRouteToOriginating) {
-        await sendPayloadAsync(payload, undefined, false, "tool");
+        const result = await routeReplyToOriginating(payload, {
+          abortSignal: undefined,
+          mirror: false,
+          kind: "tool",
+        });
+        if (result?.messageId) {
+          ingressLivenessReceiptMessageId = result.messageId;
+        }
+        if (result && !result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (ingress liveness) failed: ${
+              result.error ?? "unknown error"
+            }`,
+          );
+        }
         return;
       }
       markInboundDedupeReplayUnsafe();

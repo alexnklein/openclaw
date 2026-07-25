@@ -322,6 +322,105 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
+  it("edits the topic-scoped liveness receipt when durable handoff takes over", async () => {
+    if (!ingressObjectiveMocks.actual) {
+      throw new Error("ingress objective test seam unavailable");
+    }
+    vi.useFakeTimers();
+    const actualBeginIngressObjective = ingressObjectiveMocks.actual;
+    ingressObjectiveMocks.begin.mockImplementation((params) =>
+      actualBeginIngressObjective({
+        ...params,
+        detachAfterMs: INGRESS_LIVENESS_RECEIPT_DELAY_MS + 1,
+      }),
+    );
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    spawnSubagentDirectMock.mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:test:subagent:durable-worker",
+      runId: "durable-worker-run",
+      mode: "run",
+    });
+    const dispatcher = createDispatcher();
+    const ctx = {
+      ...createHookCtx(),
+      Body: "slow handoff turn",
+      BodyForAgent: "slow handoff turn",
+      BodyForCommands: "slow handoff turn",
+      CommandBody: "slow handoff turn",
+      RawBody: "slow handoff turn",
+      SenderId: "telegram-user-handoff",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:-1003755488173",
+      MessageThreadId: "2",
+      ChatType: "group",
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false as const,
+        body: "slow handoff turn",
+      },
+    };
+    let markResolverStarted: () => void = () => {};
+    const resolverStarted = new Promise<void>((resolve) => {
+      markResolverStarted = resolve;
+    });
+
+    try {
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { sourceReplyDeliveryMode: "automatic" },
+        replyResolver: async (_ctx, options) => {
+          markResolverStarted();
+          await new Promise<void>((resolve) => {
+            options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return { text: "NO_REPLY" };
+        },
+      });
+
+      await resolverStarted;
+      await vi.advanceTimersByTimeAsync(INGRESS_LIVENESS_RECEIPT_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await dispatch;
+
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            text: "Working on it. I'll send the result here when it's ready.",
+            isStatusNotice: true,
+          }),
+          channel: "telegram",
+          to: "telegram:-1003755488173",
+          threadId: "2",
+          replyKind: "tool",
+        }),
+      );
+      expect(mocks.routeReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            text: expect.stringContaining("Supervised worker agent:test:subagent:durable-worker"),
+            isStatusNotice: true,
+          }),
+          channel: "telegram",
+          to: "telegram:-1003755488173",
+          threadId: "2",
+          replyKind: "final",
+          previousMessageId: "mock",
+        }),
+      );
+      expect(result.queuedFinal).toBe(true);
+      expect(result.counts.final).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      ingressObjectiveMocks.begin.mockImplementation(actualBeginIngressObjective);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    }
+  });
+
   it("returns handled dispatch results from plugins", async () => {
     hookMocks.runner.runReplyDispatch.mockResolvedValue({
       handled: true,

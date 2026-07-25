@@ -202,6 +202,14 @@ export type ChannelOutboundAdapter = {
     pin: ReplyPayloadDeliveryPin;
     gatewayClientScopes?: readonly string[];
   }) => Promise<void> | void;
+  editText?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    messageId: string;
+    text: string;
+    formatting?: OutboundDeliveryFormattingOptions;
+    gatewayClientScopes?: readonly string[];
+  }) => Promise<OutboundDeliveryResult> | OutboundDeliveryResult;
   /**
    * @deprecated Use shouldTreatDeliveredTextAsVisible instead.
    */
