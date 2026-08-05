@@ -5425,7 +5425,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliveredTexts).not.toContain("stale ambient answer");
   });
 
-  it("lets newer user requests abort active same-session dispatch", async () => {
+  it("keeps newer group user requests from aborting active same-session dispatch", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([[historyKey, []]]);
     let firstStarted: (() => void) | undefined;
@@ -5442,13 +5442,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     let firstAbortSignal: AbortSignal | undefined;
     dispatchReplyWithBufferedBlockDispatcher
-      .mockImplementationOnce(async ({ replyOptions }) => {
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
         firstAbortSignal = replyOptions?.abortSignal;
         firstStarted?.();
         await firstGate;
+        await dispatcherOptions.deliver({ text: "earlier request answer" }, { kind: "final" });
         return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
+          queuedFinal: true,
+          counts: { block: 0, final: 1, tool: 0 },
         };
       })
       .mockImplementationOnce(async ({ dispatcherOptions }) => {
@@ -5495,7 +5496,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     await secondStartGate;
 
-    expect(firstAbortSignal?.aborted).toBe(true);
+    expect(firstAbortSignal?.aborted).toBe(false);
     releaseFirst?.();
     await Promise.all([firstPromise, secondPromise]);
 
@@ -5505,6 +5506,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ),
     );
     expect(deliveredTexts).toContain("fresh request answer");
+    expect(deliveredTexts).toContain("earlier request answer");
   });
 
   it("keeps newer DM requests from aborting active same-session dispatch", async () => {

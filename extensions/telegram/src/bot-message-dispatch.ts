@@ -1516,7 +1516,9 @@ export const dispatchTelegramMessage = async ({
         activeKey: replyFenceKey.activeKey,
         laneKey: scopedReplyFenceLaneKey,
       });
-  if (!isRoomEvent && supersedeReplyFence) {
+  if (!isRoomEvent) {
+    // Any addressed/user turn outranks ambient room-event work, even though
+    // normal user guidance no longer supersedes another active user turn.
     supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
   }
   replyFenceGeneration = beginTelegramReplyFence({

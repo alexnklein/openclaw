@@ -28,13 +28,13 @@ describe("shouldSupersedeTelegramReplyFence", () => {
     ).toBe(false);
   });
 
-  it("keeps normal turns and authorized aborts interrupting active runs", () => {
+  it("queues normal turns while keeping authorized aborts and commands interrupting", () => {
     expect(
       shouldSupersedeTelegramReplyFence({
         CommandBody: "@bot answer this",
         CommandAuthorized: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSupersedeTelegramReplyFence({
         CommandBody: "/stop",

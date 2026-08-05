@@ -279,17 +279,16 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   ) {
     return false;
   }
-  if (ctxPayload.ChatType === "direct") {
-    if (
-      ctxPayload.CommandAuthorized &&
-      (isExplicitCommandTurn(ctxPayload.CommandTurn) ||
-        isRecognizedTelegramTextCommand(dispatchText))
-    ) {
-      return true;
-    }
-    return false;
+  if (
+    ctxPayload.CommandAuthorized &&
+    (isExplicitCommandTurn(ctxPayload.CommandTurn) || isRecognizedTelegramTextCommand(dispatchText))
+  ) {
+    return true;
   }
-  return true;
+  // Normal user guidance is additive in both DMs and topic/group sessions.
+  // Let the configured follow-up queue serialize it instead of killing an
+  // incomplete same-session turn. Explicit stop/commands still supersede.
+  return false;
 }
 
 export function resetTelegramReplyFenceForTests(): void {
