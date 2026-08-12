@@ -168,6 +168,8 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
+  /** Hard budget for this candidate inside the caller's shared fallback deadline. */
+  timeoutMs?: number;
 };
 
 type ModelFallbackRuntimeContext = {
@@ -1286,6 +1288,12 @@ type RunWithModelFallbackParams<T> = {
   mergeExhaustedResult?: (params: { latestResult: T; preferredResult: T }) => T;
   skipAuthProfileRuntime?: boolean;
   abortSignal?: AbortSignal;
+  /** Absolute caller deadline shared by the primary and every fallback candidate. */
+  deadlineAtMs?: number;
+  /** Smallest useful candidate slice before the route is skipped. */
+  minimumCandidateSliceMs?: number;
+  /** Test-only clock injection for deterministic deadline allocation coverage. */
+  nowMs?: () => number;
 } & ModelManifestNormalizationContext;
 
 type DeferredSessionSuspensionState = {
@@ -1388,9 +1396,67 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates[0];
+  const nowMs = params.nowMs ?? Date.now;
+  const normalizedDeadlineAtMs =
+    typeof params.deadlineAtMs === "number" && Number.isFinite(params.deadlineAtMs)
+      ? Math.floor(params.deadlineAtMs)
+      : undefined;
+  const initialDeadlineBudgetMs =
+    normalizedDeadlineAtMs === undefined
+      ? undefined
+      : Math.max(0, normalizedDeadlineAtMs - nowMs());
+  const configuredMinimumCandidateSliceMs =
+    typeof params.minimumCandidateSliceMs === "number" &&
+    Number.isFinite(params.minimumCandidateSliceMs) &&
+    params.minimumCandidateSliceMs > 0
+      ? Math.floor(params.minimumCandidateSliceMs)
+      : 120_000;
+  // Short explicit turns still get a fair share per configured route. Longer
+  // turns reserve two minutes so a late fallback is not started with a token
+  // budget that cannot plausibly produce a terminal answer.
+  const minimumCandidateSliceMs =
+    initialDeadlineBudgetMs === undefined || candidates.length === 0
+      ? configuredMinimumCandidateSliceMs
+      : Math.max(
+          1,
+          Math.min(
+            configuredMinimumCandidateSliceMs,
+            Math.floor(initialDeadlineBudgetMs / candidates.length),
+          ),
+        );
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    let candidateTimeoutMs: number | undefined;
+    if (normalizedDeadlineAtMs !== undefined) {
+      const remainingMs = Math.max(0, normalizedDeadlineAtMs - nowMs());
+      const remainingCandidates = candidates.length - i;
+      candidateTimeoutMs = Math.floor(remainingMs / remainingCandidates);
+      if (candidateTimeoutMs < minimumCandidateSliceMs) {
+        const deadlineError = new FailoverError(
+          `Shared turn deadline left ${remainingMs}ms, below the ${minimumCandidateSliceMs}ms minimum candidate slice`,
+          {
+            reason: "timeout",
+            provider: candidate.provider,
+            model: candidate.model,
+            sessionId: params.sessionId,
+            lane: params.lane,
+            code: "shared_deadline_exhausted",
+          },
+        );
+        lastError = deadlineError;
+        for (const skippedCandidate of candidates.slice(i)) {
+          attempts.push({
+            provider: skippedCandidate.provider,
+            model: skippedCandidate.model,
+            error: deadlineError.message,
+            reason: "timeout",
+            code: "shared_deadline_exhausted",
+          });
+        }
+        break;
+      }
+    }
     const candidateHarnessAuth = await resolveModelFallbackCandidateHarnessAuthPrecheck({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -1647,6 +1713,7 @@ async function runWithModelFallbackInternal<T>(
       options: {
         ...runOptions,
         isFinalFallbackAttempt: i + 1 === candidates.length,
+        ...(candidateTimeoutMs !== undefined ? { timeoutMs: candidateTimeoutMs } : {}),
       },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze

@@ -2181,9 +2181,11 @@ async function runAgentTurnWithFallbackInternal(
         sessionKey: params.sessionKey,
         milestone: "before_model_fallback",
       });
+      const fallbackDeadlineAtMs = Date.now() + params.followupRun.run.timeoutMs;
       const fallbackResult = await agentTurnTiming.measure("model_fallback", () =>
         runWithModelFallback<EmbeddedAgentRunResult>({
           ...resolveModelFallbackOptions(effectiveRun, runtimeConfig),
+          deadlineAtMs: fallbackDeadlineAtMs,
           runId,
           sessionId: params.followupRun.run.sessionId,
           lane: runLane,
@@ -2462,8 +2464,9 @@ async function runAgentTurnWithFallbackInternal(
                     fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
                     fastModeAutoProgressState,
                     isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
-                    timeoutMs: params.followupRun.run.timeoutMs,
-                    runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
+                    timeoutMs: runOptions?.timeoutMs ?? params.followupRun.run.timeoutMs,
+                    runTimeoutOverrideMs:
+                      runOptions?.timeoutMs ?? params.followupRun.run.runTimeoutOverrideMs,
                     runId,
                     lane: runLane,
                     extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
@@ -2604,6 +2607,9 @@ async function runAgentTurnWithFallbackInternal(
                     fastModeStartedAtMs,
                     fastModeAutoProgressState,
                     isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+                    timeoutMs: runOptions?.timeoutMs ?? runBaseParams.timeoutMs,
+                    runTimeoutOverrideMs:
+                      runOptions?.timeoutMs ?? params.followupRun.run.runTimeoutOverrideMs,
                     sandboxSessionKey: params.runtimePolicySessionKey,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,

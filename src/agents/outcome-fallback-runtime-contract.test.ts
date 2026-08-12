@@ -101,6 +101,69 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     expect(result.attempts[0]?.code).toBe("empty_result");
   });
 
+  it("splits one caller deadline across the primary and remaining fallback routes", async () => {
+    let now = 0;
+    const run = vi.fn(
+      async (_provider: string, _model: string, _options?: { timeoutMs?: number }) => {
+        if (run.mock.calls.length === 1) {
+          now = 100;
+          throw new Error("primary unavailable");
+        }
+        return createContractRunResult({
+          payloads: [{ text: "fallback ok" }],
+          meta: { durationMs: 1, finalAssistantVisibleText: "fallback ok" },
+        });
+      },
+    );
+
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      fallbacksOverride: contractFallbackOverride,
+      deadlineAtMs: 1_200,
+      minimumCandidateSliceMs: 100,
+      nowMs: () => now,
+      run,
+      skipAuthProfileRuntime: true,
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0]?.[2]).toMatchObject({ timeoutMs: 600 });
+    expect(run.mock.calls[1]?.[2]).toMatchObject({ timeoutMs: 1_100 });
+  });
+
+  it("does not start a fallback that has less than the minimum useful deadline slice", async () => {
+    let now = 0;
+    const run = vi.fn(async () => {
+      now = 250;
+      throw new Error("primary unavailable");
+    });
+
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+        fallbacksOverride: contractFallbackOverride,
+        deadlineAtMs: 300,
+        minimumCandidateSliceMs: 100,
+        nowMs: () => now,
+        run,
+        skipAuthProfileRuntime: true,
+      }),
+    ).rejects.toMatchObject({
+      attempts: expect.arrayContaining([
+        expect.objectContaining({
+          provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
+          code: "shared_deadline_exhausted",
+        }),
+      ]),
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves a tool-authored summary when fallback candidates are exhausted", async () => {
     const terminalSummary =
       "Web fetch completed.\nOrigin: https://example.com\nStatus: 200\n\n" +
@@ -146,6 +209,52 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
         code: "incomplete_result",
       },
     ]);
+  });
+
+  it("returns the best terminal partial when the shared deadline cannot start a fallback", async () => {
+    let now = 0;
+    const incomplete = createContractRunResult({
+      payloads: [{ text: "Validated tool result", isError: true }],
+      meta: {
+        durationMs: 1,
+        error: {
+          kind: "incomplete_turn",
+          message: "Primary incomplete",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+      },
+    });
+    const run = vi.fn(async () => {
+      now = 250;
+      return incomplete;
+    });
+
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      fallbacksOverride: contractFallbackOverride,
+      deadlineAtMs: 300,
+      minimumCandidateSliceMs: 100,
+      nowMs: () => now,
+      run,
+      classifyResult: ({ provider, model, result: resultValue }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result: resultValue,
+        }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+      skipAuthProfileRuntime: true,
+    });
+
+    expect(result.outcome).toBe("exhausted");
+    expect(result.result.payloads).toEqual([{ text: "Validated tool result", isError: true }]);
+    expect(result.attempts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "shared_deadline_exhausted" })]),
+    );
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the latest structured summary after all fallback candidates are exhausted", async () => {

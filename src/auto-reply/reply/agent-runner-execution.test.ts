@@ -320,7 +320,12 @@ type FallbackRunnerParams = {
   model: string;
   sessionId?: string;
   abortSignal?: AbortSignal;
-  run: (provider: string, model: string) => Promise<unknown>;
+  deadlineAtMs?: number;
+  run: (
+    provider: string,
+    model: string,
+    options?: { isFinalFallbackAttempt?: boolean; timeoutMs?: number },
+  ) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
     provider: string;
@@ -1340,6 +1345,37 @@ describe("runAgentTurnWithFallback", () => {
     expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
     expect(fallbackCall.sessionId).toBe("session");
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
+  it("passes one absolute deadline to fallback orchestration and applies candidate slices", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed",
+      result: await params.run("anthropic", "claude", { timeoutMs: 400 }),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    const fallbackCall = requireRecord(
+      state.runWithModelFallbackMock.mock.calls[0]?.[0],
+      "runWithModelFallback params",
+    );
+    const embeddedCall = requireRecord(
+      state.runEmbeddedAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedAgent params",
+    );
+    expect(fallbackCall.deadlineAtMs).toBe(11_000);
+    expect(embeddedCall.timeoutMs).toBe(400);
+    expect(embeddedCall.runTimeoutOverrideMs).toBe(400);
   });
 
   it("freezes abort ownership only after model fallback settles", async () => {
