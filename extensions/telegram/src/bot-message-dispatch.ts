@@ -1614,6 +1614,9 @@ export const dispatchTelegramMessage = async ({
   let hadErrorReplyFailureOrSkip = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
+  let sendDurableFailureFallback:
+    | ((payload: ReplyPayload, options?: { silent?: boolean }) => Promise<boolean>)
+    | undefined;
 
   try {
     const sticker = ctxPayload.Sticker;
@@ -1787,6 +1790,43 @@ export const dispatchTelegramMessage = async ({
         deliveryState.markDelivered();
       }
       return result.delivered;
+    };
+    sendDurableFailureFallback = async (payload, options) =>
+      await sendPayload(payload, { durable: true, silent: options?.silent });
+    terminalizeTimedOutDispatch = async (event) => {
+      if (event.reason !== "handler-timeout" || timeoutTerminalized || isDispatchSuperseded()) {
+        return;
+      }
+      timeoutTerminalized = true;
+      for (const lane of [answerLane, reasoningLane]) {
+        const stream = lane.stream;
+        if (!stream || lane.finalized) {
+          continue;
+        }
+        const hasVisiblePreview =
+          lane.hasStreamedMessage ||
+          lane.lastPartialText.trim().length > 0 ||
+          typeof stream.messageId() === "number";
+        if (!hasVisiblePreview) {
+          continue;
+        }
+        await stream.stop();
+        if (typeof stream.messageId() === "number" || stream.sendMayHaveLanded?.()) {
+          lane.finalized = true;
+          lane.liveOutput.markAbortedResumable("handler-timeout");
+          deliveryState.markDelivered();
+        }
+      }
+      const delivered = await sendPayload(
+        {
+          text: "Response interrupted while processing. Ask me to continue from the visible preview.",
+          isError: true,
+        },
+        { durable: true, mirrorTranscript: false, silent: false },
+      );
+      if (delivered) {
+        finalAnswerDelivered = true;
+      }
     };
     const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
@@ -2955,13 +2995,29 @@ export const dispatchTelegramMessage = async ({
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
-    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
-      replies: [{ text: fallbackText }],
-      ...deliveryBaseOptions,
-      silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
-      mediaLoader: telegramDeps.loadWebMedia,
-    });
-    sentFallback = result.delivered;
+    const fallbackPayload: ReplyPayload = {
+      text: fallbackText,
+      isError: true,
+      isStatusNotice: true,
+      channelData: {
+        openclawFallbackReason: dispatchError ? "dispatch-error" : "delivery-failure-without-final",
+      },
+    };
+    const fallbackSilent =
+      silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip);
+    if (sendDurableFailureFallback) {
+      sentFallback = await sendDurableFailureFallback(fallbackPayload, {
+        silent: fallbackSilent,
+      });
+    } else {
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: [fallbackPayload],
+        ...deliveryBaseOptions,
+        silent: fallbackSilent,
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      sentFallback = result.delivered;
+    }
   }
 
   if (
