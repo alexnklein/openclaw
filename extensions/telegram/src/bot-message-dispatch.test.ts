@@ -2771,10 +2771,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledTimes(1);
   });
 
-  it("sends an error fallback when dispatch fails after only partial output", async () => {
+  it("durably terminalizes a network timeout after only partial output", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
-      throw new Error("dispatch failed after partial output");
+      throw new Error("network_error/timeout after partial output");
     });
 
     await dispatchWithContext({
@@ -2792,6 +2792,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
         text: "Something went wrong while processing your request. Please try again.",
       },
       1,
+    );
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Something went wrong while processing your request. Please try again.",
+          isError: true,
+          isStatusNotice: true,
+        }),
+      }),
     );
   });
 

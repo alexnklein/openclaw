@@ -921,7 +921,7 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
   });
 
-  it("resumes marked sessions with a durable pending final delivery payload (Phase 2)", async () => {
+  it("delivers a frozen pending final directly without another model run", async () => {
     const sessionsDir = await makeSessionsDir();
     const pendingPayload = "The final answer is 42.";
     await writeStore(sessionsDir, {
@@ -955,28 +955,65 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    expect(firstGatewayParams()).toMatchObject({
-      deliver: true,
-      bestEffortDeliver: true,
-      channel: "discord",
-      to: "discord:dm:final",
-      accountId: "main",
+    expect(vi.mocked(callGateway).mock.calls[0]?.[0]).toMatchObject({
+      method: "message.action",
+      params: {
+        action: "send",
+        channel: "discord",
+        accountId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "main-session",
+        params: {
+          to: "discord:dm:final",
+          message: pendingPayload,
+        },
+      },
     });
-    expect(firstGatewayParams().message).toContain(pendingPayload);
 
-    const beforeStoreRead = Date.now();
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     const entry = store["agent:main:main"];
+    expect(entry?.status).toBe("done");
     expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.pendingFinalDelivery).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryText).toBeUndefined();
+    expect(entry?.pendingFinalDeliveryContext).toBeUndefined();
+  });
+
+  it("keeps a frozen pending final when direct delivery fails", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const pendingPayload = "Preserve this exact closeout.";
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: pendingPayload,
+        pendingFinalDeliveryContext: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "finish" },
+      { role: "toolResult", content: "work completed" },
+    ]);
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway restarting"));
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(vi.mocked(callGateway).mock.calls[0]?.[0].method).toBe("message.action");
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    const entry = store["agent:main:main"];
+    expect(entry?.status).toBe("running");
+    expect(entry?.abortedLastRun).toBe(true);
     expect(entry?.pendingFinalDelivery).toBe(true);
     expect(entry?.pendingFinalDeliveryText).toBe(pendingPayload);
-    expect(entry?.pendingFinalDeliveryAttemptCount).toBe(1);
-    expect(entry?.pendingFinalDeliveryLastError).toBeNull();
-    expect(entry?.pendingFinalDeliveryCreatedAt).toBeLessThanOrEqual(beforeStoreRead);
-    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeLessThanOrEqual(beforeStoreRead);
-    expect(entry?.pendingFinalDeliveryLastAttemptAt ?? 0).toBeGreaterThanOrEqual(
-      entry?.pendingFinalDeliveryCreatedAt ?? Number.POSITIVE_INFINITY,
-    );
   });
 
   it("sanitizes durable pending final delivery payloads before resume prompts", async () => {
