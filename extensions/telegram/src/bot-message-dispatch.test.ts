@@ -4575,6 +4575,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectDeliveredReply(0, { text: "Final answer" });
   });
 
+  it("suppresses a recovered SSH retry warning after the terminal test result", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "Both test DMs delivered. Reply H1 and S1." },
+        { kind: "final" },
+      );
+      await dispatcherOptions.deliver(
+        setReplyPayloadMetadata(
+          {
+            text: "⚠️ 🛠️ Bash failed: ssh mac StemBot round-trip test S1 (agent)",
+            isError: true,
+          },
+          { nonTerminalToolErrorWarning: true },
+        ),
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Both test DMs delivered. Reply H1 and S1." });
+  });
+
   it("preserves non-terminal final error warnings before any final reply is delivered", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
