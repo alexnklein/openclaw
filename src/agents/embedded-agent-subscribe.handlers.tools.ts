@@ -78,6 +78,7 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import { isExecLikeToolName } from "./tool-error-summary.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -1224,6 +1225,15 @@ export async function handleToolExecutionEnd(
         })
       ) {
         ctx.state.lastToolError = undefined;
+      } else if (
+        isExecLikeToolName(ctx.state.lastToolError.toolName) &&
+        isExecLikeToolName(toolName)
+      ) {
+        // An exec-like retry can recover the user-visible operation while using
+        // a different wrapper or command fingerprint (for example, retrying SSH
+        // with a corrected PATH). Keep the unresolved mutation for audit and
+        // replay safety, but classify its eventual warning as non-terminal.
+        ctx.state.lastToolError.laterSameToolSuccess = true;
       }
     } else {
       ctx.state.lastToolError = undefined;

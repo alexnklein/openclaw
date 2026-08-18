@@ -663,6 +663,22 @@ describe("buildEmbeddedRunPayloads", () => {
     );
   });
 
+  it("marks a stale exec failure non-terminal after a later same-tool retry succeeds", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Both test DMs delivered."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        error: "openclaw: command not found",
+        mutatingAction: true,
+        laterSameToolSuccess: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(true);
+  });
+
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
     const payloads = buildPayloads({
       assistantTexts: ["No issues found. The update is complete."],

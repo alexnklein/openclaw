@@ -1340,6 +1340,33 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
 
     expect(subscription.getLastToolError()?.toolName).toBe("write");
+    expect(subscription.getLastToolError()?.laterSameToolSuccess).toBeUndefined();
+  });
+
+  it("marks a failed exec retry non-terminal when a later exec wrapper succeeds", () => {
+    const { emit, subscription } = createToolErrorHarness("run-tools-exec-retry");
+
+    emitToolRun({
+      emit,
+      toolName: "exec",
+      toolCallId: "e1",
+      args: { command: "ssh mac openclaw message send S1" },
+      isError: true,
+      result: { error: "openclaw: command not found" },
+    });
+    emitToolRun({
+      emit,
+      toolName: "exec",
+      toolCallId: "e2",
+      args: { command: "ssh mac PATH=/opt/homebrew/bin:$PATH openclaw message send S1" },
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(subscription.getLastToolError()).toMatchObject({
+      toolName: "exec",
+      laterSameToolSuccess: true,
+    });
   });
 
   it("keeps unresolved session_status model-mutation failure on later read-only status success", () => {
