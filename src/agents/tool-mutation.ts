@@ -121,6 +121,7 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
   "cat",
   "grep",
   "head",
+  "jq",
   "ls",
   "pwd",
   "rg",
@@ -176,14 +177,6 @@ function readShellCommand(record: Record<string, unknown> | undefined): string |
 }
 
 function tokenizeSimpleShellCommand(command: string): string[] | undefined {
-  if (/[;&|<>\n\r`]/.test(command) || command.includes("\\")) {
-    return undefined;
-  }
-  for (const char of SHELL_EXPANSION_CHARS) {
-    if (command.includes(char)) {
-      return undefined;
-    }
-  }
   const tokens: string[] = [];
   let current = "";
   let quote: "'" | '"' | undefined;
@@ -191,6 +184,8 @@ function tokenizeSimpleShellCommand(command: string): string[] | undefined {
     if (quote) {
       if (char === quote) {
         quote = undefined;
+      } else if (quote === '"' && (char === "$" || char === "`" || char === "\\")) {
+        return undefined;
       } else {
         current += char;
       }
@@ -199,6 +194,9 @@ function tokenizeSimpleShellCommand(command: string): string[] | undefined {
     if (char === "'" || char === '"') {
       quote = char;
       continue;
+    }
+    if (/[;&|<>\n\r`\\]/.test(char) || SHELL_EXPANSION_CHARS.has(char)) {
+      return undefined;
     }
     if (/\s/.test(char)) {
       if (current) {
@@ -216,6 +214,65 @@ function tokenizeSimpleShellCommand(command: string): string[] | undefined {
     tokens.push(current);
   }
   return tokens.length > 0 ? tokens : undefined;
+}
+
+function splitReadOnlyShellSegments(command: string): string[] | undefined {
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  const pushSegment = () => {
+    const segment = current.trim();
+    if (!segment) {
+      return false;
+    }
+    segments.push(segment);
+    current = "";
+    return true;
+  };
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (quote) {
+      current += char;
+      if (char === quote) {
+        quote = undefined;
+      } else if (quote === '"' && (char === "$" || char === "`" || char === "\\")) {
+        return undefined;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (
+      command.startsWith("2>/dev/null", index) &&
+      (index === 0 || /\s/.test(command[index - 1] ?? "")) &&
+      (index + 11 === command.length || /\s|[;|]/.test(command[index + 11] ?? ""))
+    ) {
+      current += " ";
+      index += 10;
+      continue;
+    }
+    if (char === ";" || char === "|") {
+      if (char === "|" && command[index + 1] === "|") {
+        return undefined;
+      }
+      if (!pushSegment()) {
+        return undefined;
+      }
+      continue;
+    }
+    if (char === "&" || char === "<" || char === ">" || char === "\n" || char === "\r") {
+      return undefined;
+    }
+    current += char;
+  }
+  if (quote || !pushSegment()) {
+    return undefined;
+  }
+  return segments;
 }
 
 function isReadOnlySedCommand(tokens: readonly string[]): boolean {
@@ -293,10 +350,7 @@ function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
   return false;
 }
 
-function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
-  if (!command) {
-    return false;
-  }
+function isPlainReadOnlyShellSegment(command: string): boolean {
   const tokens = tokenizeSimpleShellCommand(command);
   if (!tokens) {
     return false;
@@ -315,6 +369,14 @@ function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
     return isReadOnlyGhCommand(tokens);
   }
   return false;
+}
+
+function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const segments = splitReadOnlyShellSegments(command);
+  return Boolean(segments?.every((segment) => isPlainReadOnlyShellSegment(segment)));
 }
 
 function normalizeFingerprintValue(value: unknown): string | undefined {
