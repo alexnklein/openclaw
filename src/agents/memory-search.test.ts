@@ -216,7 +216,23 @@ describe("memory search config", () => {
     expect(resolved?.provider).toBe("openai");
     expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.fallback).toBe("none");
+    expect(resolved?.query.embeddingTimeoutMs).toBe(2_500);
     expect(resolved?.store.databasePath).toBe(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
+  });
+
+  it("resolves a query embedding timeout override", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            query: { embeddingTimeoutMs: 1_750 },
+          },
+        },
+      },
+    });
+
+    expect(resolveMemorySearchConfig(cfg, "main")?.query.embeddingTimeoutMs).toBe(1_750);
   });
 
   it("normalizes legacy auto provider config to openai", () => {

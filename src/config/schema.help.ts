@@ -1260,6 +1260,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
   "agents.defaults.memorySearch.query.minScore":
     "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
+  "agents.defaults.memorySearch.query.embeddingTimeoutMs":
+    "Maximum time to wait for query embeddings when FTS keyword fallback is available (default: 2500ms). Increase for slow healthy embedding providers, or lower to prioritize response latency.",
   "agents.defaults.memorySearch.query.hybrid.enabled":
     "Combines BM25 keyword matching with vector similarity for better recall on mixed exact + semantic queries. Keep enabled unless you are isolating ranking behavior for troubleshooting.",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight":

@@ -505,6 +505,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
+  "agents.defaults.memorySearch.query.embeddingTimeoutMs":
+    "Memory Search Query Embedding Timeout (ms)",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight": "Memory Search Vector Weight",
   "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
