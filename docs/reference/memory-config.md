@@ -317,6 +317,8 @@ All under `memorySearch.query.hybrid`:
 | `textWeight`          | `number`  | `0.3`   | Weight for BM25 scores (0-1)       |
 | `candidateMultiplier` | `number`  | `4`     | Candidate pool size multiplier     |
 
+Set `memorySearch.query.embeddingTimeoutMs` to bound query-time embedding latency when FTS is available. The default is `2500` ms. If the deadline expires, OpenClaw aborts the embedding request and returns keyword-only results. The deadline does not apply when FTS is unavailable, because no lexical fallback exists.
+
 <Tabs>
   <Tab title="MMR (diversity)">
     | Key           | Type      | Default | Description                          |

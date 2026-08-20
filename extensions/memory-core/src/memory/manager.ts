@@ -745,16 +745,37 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             return [];
           })
         : [];
-    let keywordResults = await loadKeywordResults();
+    // Start lexical retrieval alongside the remote embedding request. FTS is
+    // normally local and fast, so it can become the bounded fallback without
+    // adding its latency in front of every healthy vector query.
+    const keywordResultsPromise = loadKeywordResults();
+    let keywordResults: Awaited<ReturnType<typeof loadKeywordResults>>;
+
+    const canUseKeywordFallback = hybrid.enabled && this.fts.enabled && this.fts.available;
+    const embeddingTimeoutSignal = canUseKeywordFallback
+      ? AbortSignal.timeout(this.settings.query.embeddingTimeoutMs)
+      : undefined;
+    const embeddingSignal = embeddingTimeoutSignal
+      ? opts?.signal
+        ? AbortSignal.any([opts.signal, embeddingTimeoutSignal])
+        : embeddingTimeoutSignal
+      : opts?.signal;
 
     let queryVec: number[];
     try {
-      queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
+      queryVec = await this.embedQueryWithRetry(cleaned, embeddingSignal);
     } catch (err) {
       // An aborted caller already stopped waiting; skip fallback-provider
       // activation so the abandoned search stops instead of re-embedding.
       if (opts?.signal?.aborted) {
         throw err;
+      }
+      keywordResults = await keywordResultsPromise;
+      if (embeddingTimeoutSignal?.aborted) {
+        log.warn(
+          `memory search: query embeddings exceeded ${this.settings.query.embeddingTimeoutMs}ms; using keyword-only results`,
+        );
+        return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
       }
       const message = formatErrorMessage(err);
       const activatedFallback = this.shouldFallbackOnError(err)
@@ -774,7 +795,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           return [];
         }
         keywordResults = await loadKeywordResults();
-        queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
+        try {
+          queryVec = await this.embedQueryWithRetry(cleaned, embeddingSignal);
+        } catch (fallbackErr) {
+          if (opts?.signal?.aborted) {
+            throw fallbackErr;
+          }
+          if (embeddingTimeoutSignal?.aborted) {
+            log.warn(
+              `memory search: fallback query embeddings exceeded ${this.settings.query.embeddingTimeoutMs}ms; using keyword-only results`,
+            );
+            return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
+          }
+          throw fallbackErr;
+        }
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
         log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
         return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
@@ -782,6 +816,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         throw err;
       }
     }
+    keywordResults = await keywordResultsPromise;
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err: unknown) => {

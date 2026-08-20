@@ -558,6 +558,11 @@ export type MemorySearchConfig = {
   query?: {
     maxResults?: number;
     minScore?: number;
+    /**
+     * Max time to wait for query embeddings when FTS can provide a keyword-only fallback.
+     * Default: 2500ms. This deadline is not applied when FTS is unavailable.
+     */
+    embeddingTimeoutMs?: number;
     hybrid?: {
       /** Enable hybrid BM25 + vector search (default: true). */
       enabled?: boolean;

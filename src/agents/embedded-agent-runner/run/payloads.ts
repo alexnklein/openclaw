@@ -208,7 +208,7 @@ function shouldIncludeToolErrorDetails(params: {
 }
 
 function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
-  return lastToolError.middlewareError === true;
+  return lastToolError.middlewareError === true || lastToolError.laterSameToolSuccess === true;
 }
 
 function formatToolErrorWarningText(params: {

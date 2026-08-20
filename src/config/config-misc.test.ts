@@ -1250,6 +1250,20 @@ describe("config strict validation", () => {
     }
   });
 
+  it("accepts a memory query embedding timeout", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            query: { embeddingTimeoutMs: 2_500 },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects top-level memorySearch without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

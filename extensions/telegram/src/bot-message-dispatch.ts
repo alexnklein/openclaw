@@ -1649,6 +1649,9 @@ export const dispatchTelegramMessage = async ({
   let hadErrorReplyFailureOrSkip = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
+  let sendDurableFailureFallback:
+    | ((payload: ReplyPayload, options?: { silent?: boolean }) => Promise<boolean>)
+    | undefined;
 
   try {
     const sticker = ctxPayload.Sticker;
@@ -1823,6 +1826,8 @@ export const dispatchTelegramMessage = async ({
       }
       return result.delivered;
     };
+    sendDurableFailureFallback = async (payload, options) =>
+      await sendPayload(payload, { durable: true, silent: options?.silent });
     terminalizeTimedOutDispatch = async (event) => {
       if (event.reason !== "handler-timeout" || timeoutTerminalized || isDispatchSuperseded()) {
         return;
@@ -3057,13 +3062,29 @@ export const dispatchTelegramMessage = async ({
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
-    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
-      replies: [{ text: fallbackText }],
-      ...deliveryBaseOptions,
-      silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
-      mediaLoader: telegramDeps.loadWebMedia,
-    });
-    sentFallback = result.delivered;
+    const fallbackPayload: ReplyPayload = {
+      text: fallbackText,
+      isError: true,
+      isStatusNotice: true,
+      channelData: {
+        openclawFallbackReason: dispatchError ? "dispatch-error" : "delivery-failure-without-final",
+      },
+    };
+    const fallbackSilent =
+      silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip);
+    if (sendDurableFailureFallback) {
+      sentFallback = await sendDurableFailureFallback(fallbackPayload, {
+        silent: fallbackSilent,
+      });
+    } else {
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: [fallbackPayload],
+        ...deliveryBaseOptions,
+        silent: fallbackSilent,
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      sentFallback = result.delivered;
+    }
   }
 
   if (

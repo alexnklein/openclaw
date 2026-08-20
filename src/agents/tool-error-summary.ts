@@ -13,6 +13,8 @@ export type ToolErrorSummary = {
   error?: string;
   timedOut?: boolean;
   middlewareError?: boolean;
+  /** A later invocation of the same tool succeeded, but did not prove the exact mutation recovered. */
+  laterSameToolSuccess?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
   fileTarget?: FileTarget;
