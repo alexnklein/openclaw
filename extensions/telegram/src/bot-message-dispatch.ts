@@ -1119,13 +1119,23 @@ export const dispatchTelegramMessage = async ({
       answerLane.lastPartialText = streamText;
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
-      answerLane.stream?.updatePreview(
-        renderTelegramProgressDraftPreview(
-          streamText,
-          options?.lines ?? [],
-          telegramCfg.richMessages === true,
-        ),
+      const progressPreview = renderTelegramProgressDraftPreview(
+        streamText,
+        options?.lines ?? [],
+        telegramCfg.richMessages === true,
       );
+      const progressPreviewLength =
+        progressPreview.richMessage?.html?.length ??
+        progressPreview.richMessage?.markdown?.length ??
+        progressPreview.text.length;
+      // Below the page limit, preserve the exact explicit preview contract.
+      // Once it needs pagination, pass the original text coordinate so the
+      // draft stream splits first and renders each page with balanced HTML.
+      if (progressPreviewLength > draftMaxChars) {
+        answerLane.stream?.updatePreview(progressPreview, streamText);
+      } else {
+        answerLane.stream?.updatePreview(progressPreview);
+      }
       if (options?.flush) {
         await answerLane.stream?.flush();
       }

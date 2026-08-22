@@ -297,6 +297,43 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("chunks 500-character progress previews before rendering HTML", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, {
+      maxChars: 500,
+      renderText: (text) => ({
+        text: `<b>Shelling</b><br><code>${text}</code>`,
+        parseMode: "HTML",
+      }),
+    });
+    const sourceText = `Bash ${"safe-action ".repeat(60)}`.trimEnd();
+
+    stream.updatePreview(
+      {
+        text: `<b>Shelling</b><br><code>${sourceText}</code>`,
+        parseMode: "HTML",
+      },
+      sourceText,
+    );
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    for (const call of api.sendMessage.mock.calls) {
+      const text = call[1];
+      expect(text.length).toBeLessThanOrEqual(500);
+      expect(text).not.toContain("<br>");
+      expect(text).toMatch(/^<b>Shelling<\/b>\n<code>[\s\S]*<\/code>$/u);
+      expect(text.match(/<code>/gu)).toHaveLength(1);
+      expect(text.match(/<\/code>/gu)).toHaveLength(1);
+    }
+    expect(api.sendMessage.mock.calls.map((call) => call[1]).join(" ")).not.toContain(
+      "&lt;code&gt;",
+    );
+  });
+
   it("returns existing preview id when materializing message transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {

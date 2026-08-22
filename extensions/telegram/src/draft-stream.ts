@@ -52,7 +52,7 @@ const MIN_PREVIEW_DWELL_MS = 4_000;
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
-  updatePreview: (preview: TelegramDraftPreview) => void;
+  updatePreview: (preview: TelegramDraftPreview, sourceText?: string) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
   visibleSinceMs?: () => number | undefined;
@@ -462,7 +462,7 @@ export function createTelegramDraftStream(params: {
       return false;
     }
     const rendered =
-      deliveredTextOffset === 0 && lastRequestedPreview?.text === trimmed
+      deliveredTextOffset === 0 && lastRequestedPreview && lastRequestedText === trimmed
         ? lastRequestedPreview
         : renderTelegramDraftPreview(currentText, params.renderText);
     const renderedText = resolveTelegramDraftRenderedText(rendered, richMessages).trimEnd();
@@ -634,11 +634,16 @@ export function createTelegramDraftStream(params: {
     requestDraftUpdate(text);
   };
 
-  const updatePreview = (preview: TelegramDraftPreview) => {
-    const text = preview.text.trimEnd();
-    if (!text) {
+  const updatePreview = (preview: TelegramDraftPreview, sourceText?: string) => {
+    const text = (sourceText ?? preview.text).trimEnd();
+    if (!text || !preview.text.trimEnd()) {
       return;
     }
+    // Explicit previews can contain rendered HTML whose length and tag
+    // boundaries do not match the original progress text. Keep pagination in
+    // the source coordinate and render each page only after it is split. This
+    // prevents the block-mode maxChars boundary from cutting through <b>,
+    // <code>, entities, or UTF-16 pairs and then re-rendering the fragment.
     requestDraftUpdate(text, { ...preview, text });
   };
 
