@@ -3135,6 +3135,28 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("keeps the full progress trace when progress persistence is enabled", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: "All done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { persist: true } } },
+    });
+
+    expectDeliveredReply(0, { text: "All done" });
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(answerDraftStream.finalizeToPreview).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("still collapses the window when the final answer send is skipped", async () => {
     // Failure path: if the final send skips/fails, the window must not be left
     // stale — it still collapses to the bar (once-guard already consumed).
@@ -3671,6 +3693,30 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     const texts = allDeliveredReplyTexts();
     expect(texts).toContain("💬 1 note · 🛠️ 1 tool call · ⏱️ 1s");
+  });
+
+  it("retains a message_tool_only progress trace when persistence is enabled", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({ kind: "preamble", itemId: "c1", progressText: "Note" });
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return {
+        queuedFinal: true,
+        counts: { block: 0, final: 1, tool: 1 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { persist: true } } },
+    });
+
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.finalizeToPreview).not.toHaveBeenCalled();
+    expect(allDeliveredReplyTexts().some((text) => text.includes("⏱️"))).toBe(false);
   });
 
   it("replaces Telegram command progress items with matching command output", async () => {

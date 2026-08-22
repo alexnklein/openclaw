@@ -924,6 +924,8 @@ export const dispatchTelegramMessage = async ({
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const streamDeliveryEnabled = !isRoomEvent && streamMode !== "off";
+  const persistProgressDraft =
+    streamMode === "progress" && telegramCfg.streaming?.progress?.persist === true;
   const rawReplyQuoteText =
     ctxPayload.ReplyToIsQuote && typeof ctxPayload.ReplyToQuoteText === "string"
       ? ctxPayload.ReplyToQuoteText
@@ -2137,6 +2139,20 @@ export const dispatchTelegramMessage = async ({
       payload: ReplyPayload,
       text: string,
     ): Promise<LaneDeliveryResult> => {
+      if (persistProgressDraft) {
+        // Freeze the latest full trace before posting the final below it. Mark
+        // the lane finalized so generic turn cleanup stops rather than deletes
+        // the retained preview.
+        await answerLane.stream?.stop();
+        answerLane.finalized = true;
+        progressSummaryDelivered = true;
+        const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
+        if (!delivered) {
+          return { kind: "skipped" };
+        }
+        markProgressFinalDelivered();
+        return { kind: "sent" };
+      }
       if (payload.isError === true) {
         // Error finals get no collapse summary (Discord parity); tear down, then
         // deliver the error below.
@@ -2994,13 +3010,18 @@ export const dispatchTelegramMessage = async ({
         { laneName: "answer", lane: answerLane },
         { laneName: "reasoning", lane: reasoningLane },
       ];
-      for (const { lane } of lanesToCleanup) {
+      for (const { laneName, lane } of lanesToCleanup) {
         const stream = lane.stream;
         if (!stream) {
           continue;
         }
         if (isDispatchSuperseded()) {
           await (typeof stream.discard === "function" ? stream.discard() : stream.stop());
+          continue;
+        }
+        if (persistProgressDraft && laneName === "answer" && sawProgressFinal) {
+          await stream.stop();
+          lane.finalized = true;
           continue;
         }
         if (lane.finalized) {
@@ -3016,6 +3037,7 @@ export const dispatchTelegramMessage = async ({
       // double-posting or firing when the window never rendered.
       if (
         streamMode === "progress" &&
+        !persistProgressDraft &&
         sawProgressFinal &&
         !dispatchError &&
         !hadErrorReplyFailureOrSkip &&

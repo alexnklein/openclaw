@@ -70,6 +70,8 @@ export type ChannelStreamingProgressConfig = {
   commandText?: ChannelStreamingCommandTextMode;
   /** Include assistant commentary/preamble text in the progress draft. Default: false. */
   commentary?: boolean;
+  /** Keep the full progress draft after final delivery instead of collapsing it. Default: false. */
+  persist?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {
