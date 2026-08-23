@@ -3970,6 +3970,7 @@ export async function dispatchReplyFromConfig(
     ingressObjective?.complete(terminalSummary);
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    const replyOperationFailed = dispatchReplyOperation?.result?.kind === "failed";
     commitInboundDedupeIfClaimed();
     recordAgentDispatchCompleted("completed");
     recordProcessed(
@@ -3985,7 +3986,9 @@ export async function dispatchReplyFromConfig(
         ? { sessionMetadataChanges: sessionMetadataChangesForResult }
         : {}),
       ...(observedReplyDelivery ? { observedReplyDelivery } : {}),
-      ...(!queuedFinal && !observedReplyDelivery && !emptyFinalAllowedAsSilent
+      ...(!queuedFinal &&
+      !observedReplyDelivery &&
+      (!emptyFinalAllowedAsSilent || replyOperationFailed)
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

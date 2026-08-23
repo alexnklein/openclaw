@@ -643,6 +643,42 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     }
   });
 
+  it("marks a failed group turn eligible for a visible terminal fallback", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: {
+        ...createHookCtx(),
+        ChatType: "group",
+        From: "telegram:-1001234",
+        To: "telegram:-1001234",
+      },
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: { group: "allow" },
+          },
+        },
+      },
+      dispatcher,
+      replyResolver: async () => {
+        const operation = replyRunRegistry.get("agent:test:session");
+        if (!operation) {
+          throw new Error("expected dispatch reply operation");
+        }
+        operation.fail("run_failed", new Error("provider auth failed"));
+        return undefined;
+      },
+    });
+
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      noVisibleReplyFallbackEligible: true,
+    });
+  });
+
   it("clears the reply lane but defers follow-up admission until final delivery settles", async () => {
     const deliveryOrder: string[] = [];
     let startDelivery: () => void = () => {};

@@ -479,6 +479,50 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("starts typing before a same-topic message waits in sequentialize", async () => {
+    installPerKeySequentializer();
+    createTelegramBot({ token: "tok" });
+    let releaseBusyUpdate: (() => void) | undefined;
+    const busyUpdateGate = new Promise<void>((resolve) => {
+      releaseBusyUpdate = resolve;
+    });
+    const busyCtx = makeForumGroupMessageCtx({ threadId: 99, text: "busy" });
+    const queuedCtx = {
+      ...makeForumGroupMessageCtx({ threadId: 99, text: "queued" }),
+      update: { update_id: 402 },
+    };
+
+    const busyPromise = runTelegramMiddlewareChain({
+      ctx: busyCtx,
+      finalHandler: async () => {
+        await busyUpdateGate;
+      },
+    });
+    await flushTelegramTestMicrotasks();
+    expect(sendChatActionSpy).toHaveBeenCalledWith(-1001234567890, "typing", {
+      message_thread_id: 99,
+    });
+
+    let queuedHandlerStarted = false;
+    const queuedPromise = runTelegramMiddlewareChain({
+      ctx: queuedCtx,
+      finalHandler: async () => {
+        queuedHandlerStarted = true;
+      },
+    });
+    await flushTelegramTestMicrotasks();
+
+    expect(queuedHandlerStarted).toBe(false);
+
+    if (!releaseBusyUpdate) {
+      throw new Error("Expected Telegram busy update release callback to be initialized");
+    }
+    releaseBusyUpdate();
+    await busyPromise;
+    await queuedPromise;
+    expect(queuedHandlerStarted).toBe(true);
+  });
+
   it("lets /status bypass a busy Telegram topic lane", async () => {
     installPerKeySequentializer();
     loadConfig.mockReturnValue({
