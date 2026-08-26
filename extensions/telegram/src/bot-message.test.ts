@@ -30,13 +30,17 @@ vi.mock("./bot-message-dispatch.js", () => ({
 
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 let formatTelegramInboundLogLine: typeof import("./bot-message.js").formatTelegramInboundLogLine;
+let TELEGRAM_INGRESS_TYPING_KEEPALIVE_MS: typeof import("./bot-message.js").TELEGRAM_INGRESS_TYPING_KEEPALIVE_MS;
 let runWithTelegramUpdateProcessingFrame: typeof import("./bot-processing-outcome.js").runWithTelegramUpdateProcessingFrame;
 let withTelegramSpooledReplayUpdate: typeof import("./bot-processing-outcome.js").withTelegramSpooledReplayUpdate;
 
 describe("telegram bot message processor", () => {
   beforeAll(async () => {
-    ({ createTelegramMessageProcessor, formatTelegramInboundLogLine } =
-      await import("./bot-message.js"));
+    ({
+      createTelegramMessageProcessor,
+      formatTelegramInboundLogLine,
+      TELEGRAM_INGRESS_TYPING_KEEPALIVE_MS,
+    } = await import("./bot-message.js"));
     ({ runWithTelegramUpdateProcessingFrame, withTelegramSpooledReplayUpdate } =
       await import("./bot-processing-outcome.js"));
   });
@@ -253,6 +257,36 @@ describe("telegram bot message processor", () => {
 
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps typing visible while the admitted Telegram turn is queued", async () => {
+    vi.useFakeTimers();
+    let finishDispatch: () => void = () => {};
+    const dispatchGate = new Promise<void>((resolve) => {
+      finishDispatch = resolve;
+    });
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext({ sendTyping }));
+    dispatchTelegramMessage.mockReturnValue(dispatchGate);
+
+    try {
+      const processMessage = createTelegramMessageProcessor(baseDeps);
+      const processing = processSampleMessage(processMessage);
+      await vi.waitFor(() => expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1));
+      expect(sendTyping).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(TELEGRAM_INGRESS_TYPING_KEEPALIVE_MS * 2);
+      expect(sendTyping).toHaveBeenCalledTimes(3);
+
+      finishDispatch();
+      await expect(processing).resolves.toEqual({ kind: "completed" });
+      const callsAfterDispatch = sendTyping.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(TELEGRAM_INGRESS_TYPING_KEEPALIVE_MS * 2);
+      expect(sendTyping).toHaveBeenCalledTimes(callsAfterDispatch);
+    } finally {
+      finishDispatch();
+      vi.useRealTimers();
+    }
   });
 
   it("sends user-visible fallback when dispatch throws", async () => {

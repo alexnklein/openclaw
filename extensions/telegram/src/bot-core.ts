@@ -39,7 +39,11 @@ import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTypingThreadParams,
+  resolveTelegramStreamMode,
+} from "./bot/helpers.js";
 import { setTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
 import {
   asTelegramClientFetch,
@@ -157,6 +161,17 @@ export function createTelegramBotCore(
       ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
       : undefined;
   const bot = new botRuntime.Bot(opts.token, botConfig);
+
+  // Keep the operator-visible typing lease alive before sequentialize queues a
+  // same-topic update behind an active turn. The normal message processor only
+  // starts after that queue drains, which can otherwise leave Telegram silent
+  // for the full duration of the preceding turn.
+  const sendChatActionHandler = createTelegramSendChatActionHandler({
+    sendChatActionFn: (chatId, action, threadParams) =>
+      bot.api.sendChatAction(chatId, action, threadParams),
+    logger: (message) => logVerbose(`telegram: ${message}`),
+    minIntervalMs: TELEGRAM_TYPING_COALESCE_MS,
+  });
   bot.api.config.use(getOrCreateAccountThrottler(opts.token, botRuntime.apiThrottler));
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
@@ -236,6 +251,54 @@ export function createTelegramBotCore(
       void answerPromise.catch(() => {});
     }
     await next();
+  });
+
+  bot.use(async (ctx, next) => {
+    const message = ctx.message;
+    if (!message) {
+      await next();
+      return;
+    }
+    const chatId = message.chat.id;
+    const messageThreadId = message.message_thread_id;
+    if (String(chatId).startsWith("-")) {
+      const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+        telegramCfg,
+        chatId,
+        messageThreadId,
+      );
+      const groupPolicy = topicConfig?.groupPolicy ?? groupConfig?.groupPolicy;
+      if (
+        topicConfig?.enabled === false ||
+        groupConfig?.enabled === false ||
+        groupPolicy === "disabled"
+      ) {
+        await next();
+        return;
+      }
+    }
+    const sendTyping = () =>
+      sendChatActionHandler.sendChatAction(
+        chatId,
+        "typing",
+        buildTypingThreadParams(messageThreadId),
+      );
+    try {
+      await sendTyping();
+    } catch (err) {
+      logVerbose(`telegram pre-queue typing cue failed for chat ${chatId}: ${String(err)}`);
+    }
+    const typingKeepalive = setInterval(() => {
+      sendTyping().catch((err) => {
+        logVerbose(`telegram pre-queue typing keepalive failed for chat ${chatId}: ${String(err)}`);
+      });
+    }, TELEGRAM_TYPING_COALESCE_MS);
+    typingKeepalive.unref?.();
+    try {
+      await next();
+    } finally {
+      clearInterval(typingKeepalive);
+    }
   });
 
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
@@ -379,17 +442,6 @@ export function createTelegramBotCore(
     const freshTelegramCfg = loadFreshTelegramAccountConfig();
     return resolveTelegramScopedGroupConfig(freshTelegramCfg, chatId, messageThreadId);
   };
-
-  // Global sendChatAction handler with 401 backoff and transient cooldown.
-  // Created BEFORE the message processor so it can be injected into every message context.
-  // Shared across all message contexts for this account so that consecutive 401s
-  // from ANY chat are tracked together — prevents infinite retry storms.
-  const sendChatActionHandler = createTelegramSendChatActionHandler({
-    sendChatActionFn: (chatId, action, threadParams) =>
-      bot.api.sendChatAction(chatId, action, threadParams),
-    logger: (message) => logVerbose(`telegram: ${message}`),
-    minIntervalMs: TELEGRAM_TYPING_COALESCE_MS,
-  });
 
   const processMessage = createTelegramMessageProcessor({
     bot,

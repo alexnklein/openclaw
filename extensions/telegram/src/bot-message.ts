@@ -27,6 +27,8 @@ import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
+export const TELEGRAM_INGRESS_TYPING_KEEPALIVE_MS = 4_000;
+
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
 export function formatTelegramInboundLogLine(params: {
@@ -180,14 +182,22 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
-    if (
-      context.ctxPayload.InboundEventKind !== "room_event" &&
-      context.initialTypingCueSent !== true
-    ) {
+    const keepIngressTypingAlive = context.ctxPayload.InboundEventKind !== "room_event";
+    if (keepIngressTypingAlive && context.initialTypingCueSent !== true) {
       void context.sendTyping().catch((err: unknown) => {
         logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
       });
     }
+    const ingressTypingKeepalive = keepIngressTypingAlive
+      ? setInterval(() => {
+          void context.sendTyping().catch((err: unknown) => {
+            logVerbose(
+              `telegram ingress typing keepalive failed for chat ${context.chatId}: ${String(err)}`,
+            );
+          });
+        }, TELEGRAM_INGRESS_TYPING_KEEPALIVE_MS)
+      : undefined;
+    ingressTypingKeepalive?.unref?.();
     telegramInboundLog.info(
       formatTelegramInboundLogLine({
         from: context.ctxPayload.From,
@@ -251,6 +261,10 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       };
       recordCurrentUpdateProcessingResult(result);
       return result;
+    } finally {
+      if (ingressTypingKeepalive) {
+        clearInterval(ingressTypingKeepalive);
+      }
     }
   };
 };
