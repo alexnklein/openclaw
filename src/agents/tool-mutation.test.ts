@@ -45,12 +45,19 @@ describe("tool mutation helpers", () => {
     ["exec", "sed -n '1,220p' src/agents/tool-mutation.ts"],
     ["bash", "cat package.json"],
     ["exec", "rg -n tool-mutation src/agents"],
+    ["bash", "rg foo src | wc -l"],
+    [
+      "bash",
+      'jq \'.[] | select((.repo // "") == "alexnklein/openclaw" or (.number == 1))\' required.json 2>/dev/null; jq \'.. | objects | select((.repo? // "") == "alexnklein/openclaw")\' state.json 2>/dev/null; tail -80 watcher.log 2>/dev/null | rg -n "openclaw|#1|Replay Merge"',
+    ],
     ["exec", "gh search prs --repo openclaw/openclaw tool-mutation --json number,title,state"],
     ["bash", "gh pr view 123 --repo openclaw/openclaw --json title,state"],
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
-    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
+    expect(
+      buildToolMutationState(toolName, { command }, command).actionFingerprint,
+    ).toBeUndefined();
   });
 
   it.each([
@@ -59,7 +66,8 @@ describe("tool mutation helpers", () => {
     ["exec", "sed -n '1p' -i file.txt"],
     ["exec", "sed -n -e '1p' -e 'w /tmp/out' file.txt"],
     ["bash", "cat package.json > /tmp/package.json"],
-    ["bash", "rg foo src | wc -l"],
+    ["bash", "cat package.json; touch /tmp/package.json"],
+    ["bash", "jq '.name' package.json 2>/tmp/jq.err"],
     ["bash", "rg --pre touch pattern file"],
     ["bash", "rg --pre=touch pattern file"],
     ["bash", "rg --hostname-bin /tmp/helper pattern file"],

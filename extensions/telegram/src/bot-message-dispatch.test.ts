@@ -2766,10 +2766,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledTimes(1);
   });
 
-  it("sends an error fallback when dispatch fails after only partial output", async () => {
+  it("durably terminalizes a network timeout after only partial output", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
-      throw new Error("dispatch failed after partial output");
+      throw new Error("network_error/timeout after partial output");
     });
 
     await dispatchWithContext({
@@ -2787,6 +2787,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
         text: "Something went wrong while processing your request. Please try again.",
       },
       1,
+    );
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "Something went wrong while processing your request. Please try again.",
+          isError: true,
+          isStatusNotice: true,
+        }),
+      }),
     );
   });
 
@@ -4559,6 +4568,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(deliverReplies).toHaveBeenCalledTimes(1);
     expectDeliveredReply(0, { text: "Final answer" });
+  });
+
+  it("suppresses a recovered SSH retry warning after the terminal test result", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "Both test DMs delivered. Reply H1 and S1." },
+        { kind: "final" },
+      );
+      await dispatcherOptions.deliver(
+        setReplyPayloadMetadata(
+          {
+            text: "⚠️ 🛠️ Bash failed: ssh mac StemBot round-trip test S1 (agent)",
+            isError: true,
+          },
+          { nonTerminalToolErrorWarning: true },
+        ),
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "off" });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Both test DMs delivered. Reply H1 and S1." });
   });
 
   it("preserves non-terminal final error warnings before any final reply is delivered", async () => {

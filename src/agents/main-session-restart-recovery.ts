@@ -460,6 +460,7 @@ async function markSessionFailed(params: {
       entry.pendingFinalDeliveryAttemptCount = undefined;
       entry.pendingFinalDeliveryLastError = undefined;
       entry.pendingFinalDeliveryContext = undefined;
+      entry.pendingFinalDeliveryIntentId = undefined;
       entry.restartRecoveryDeliveryContext = undefined;
       entry.restartRecoveryDeliveryRunId = undefined;
       return {
@@ -469,6 +470,43 @@ async function markSessionFailed(params: {
     },
   });
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
+}
+
+async function markSessionRecoverySatisfied(params: {
+  storePath: string;
+  sessionKey: string;
+  reason: string;
+}): Promise<void> {
+  await applyRestartRecoveryLifecycle({
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (!entry) {
+        return { result: undefined };
+      }
+      const now = Date.now();
+      entry.status = "done";
+      entry.abortedLastRun = false;
+      entry.endedAt = entry.endedAt ?? now;
+      entry.updatedAt = now;
+      entry.restartRecoveryDeliveryContext = undefined;
+      entry.restartRecoveryDeliveryRunId = undefined;
+      entry.pendingFinalDelivery = undefined;
+      entry.pendingFinalDeliveryText = undefined;
+      entry.pendingFinalDeliveryCreatedAt = undefined;
+      entry.pendingFinalDeliveryLastAttemptAt = undefined;
+      entry.pendingFinalDeliveryAttemptCount = undefined;
+      entry.pendingFinalDeliveryLastError = undefined;
+      entry.pendingFinalDeliveryContext = undefined;
+      entry.pendingFinalDeliveryIntentId = undefined;
+      return {
+        result: undefined,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+  log.info(`restart recovery already satisfied: ${params.sessionKey} (${params.reason})`);
 }
 
 async function sendUnresumableSessionNotice(params: {
@@ -492,7 +530,7 @@ async function sendUnresumableSessionNotice(params: {
     message: UNRESUMABLE_SESSION_NOTICE,
     bestEffort: true,
   };
-  if (deliveryContext?.threadId != null) {
+  if (deliveryContext.threadId != null) {
     messageParams.threadId = deliveryContext.threadId;
   }
   const actionParams: Record<string, unknown> = {
@@ -503,7 +541,7 @@ async function sendUnresumableSessionNotice(params: {
     idempotencyKey: `main-session-restart-recovery:${params.entry.sessionId}:failed-notice`,
     params: messageParams,
   };
-  const accountId = normalizeOptionalString(deliveryContext?.accountId);
+  const accountId = normalizeOptionalString(deliveryContext.accountId);
   if (accountId) {
     actionParams.accountId = accountId;
   }
@@ -576,6 +614,47 @@ async function resumeMainSession(params: {
     entry: params.entry,
     sessionKey: params.sessionKey,
   });
+  if (sanitizedPendingText && deliveryContext) {
+    const stableDeliveryId =
+      normalizeOptionalString(params.entry.pendingFinalDeliveryIntentId) ??
+      crypto
+        .createHash("sha256")
+        .update(`${params.entry.sessionId}\u0000${sanitizedPendingText}`)
+        .digest("hex")
+        .slice(0, 24);
+    const messageParams: Record<string, unknown> = {
+      to: deliveryContext.to,
+      message: sanitizedPendingText,
+    };
+    if (deliveryContext.threadId != null) {
+      messageParams.threadId = deliveryContext.threadId;
+    }
+    try {
+      await callGateway({
+        method: "message.action",
+        params: {
+          channel: deliveryContext.channel,
+          action: "send",
+          sessionKey: params.sessionKey,
+          sessionId: params.entry.sessionId,
+          idempotencyKey: `main-session-pending-final:${stableDeliveryId}`,
+          params: messageParams,
+          ...(deliveryContext.accountId ? { accountId: deliveryContext.accountId } : {}),
+        },
+        timeoutMs: 10_000,
+      });
+      await markSessionRecoverySatisfied({
+        storePath: params.storePath,
+        sessionKey: params.sessionKey,
+        reason: "delivered frozen pending final",
+      });
+      log.info(`delivered frozen pending final directly: ${params.sessionKey}`);
+      return true;
+    } catch (err) {
+      log.warn(`failed to deliver frozen pending final ${params.sessionKey}: ${String(err)}`);
+      return false;
+    }
+  }
   try {
     const agentParams: Record<string, unknown> = {
       message: buildResumeMessage(sanitizedPendingText),
