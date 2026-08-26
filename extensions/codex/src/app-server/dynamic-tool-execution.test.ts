@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS,
+  CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   handleDynamicToolCallWithTimeout,
@@ -121,6 +122,26 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
+  });
+
+  it("keeps Skill Workshop calls alive through the plugin approval window", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-skill-workshop-apply",
+          namespace: null,
+          tool: "skill_workshop",
+          arguments: {
+            action: "apply",
+            proposal_id: "proposal-1",
+          },
+        },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS);
+    expect(CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS).toBeGreaterThan(130_000);
   });
 
   it("uses media image config and caps excessive dynamic tool timeouts", () => {

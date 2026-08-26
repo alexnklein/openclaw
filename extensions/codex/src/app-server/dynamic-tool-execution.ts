@@ -28,6 +28,12 @@ const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 export const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
 export const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 120_000;
+/**
+ * Timeout for Skill Workshop calls. Lifecycle actions can wait up to 120s for
+ * plugin approval, plus 10s of gateway transport grace. Keep the outer dynamic
+ * tool watchdog above that inner budget so approvals can resolve normally.
+ */
+export const CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS = 150_000;
 const LOG_FIELD_MAX_LENGTH = 160;
 
 type DynamicToolTimeoutDetails = {
@@ -478,6 +484,10 @@ function readConfiguredDynamicToolTimeoutMs(
 
   if (toolName === "message") {
     return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
+  }
+
+  if (toolName === "skill_workshop") {
+    return CODEX_DYNAMIC_SKILL_WORKSHOP_TOOL_TIMEOUT_MS;
   }
 
   return undefined;
