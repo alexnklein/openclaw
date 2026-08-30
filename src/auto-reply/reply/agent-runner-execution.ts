@@ -2665,6 +2665,7 @@ async function runAgentTurnWithFallbackInternal(
                       await params.opts.onPartialReply({
                         text: textForTyping,
                         mediaUrls: payload.mediaUrls,
+                        ...(payload.replace === true ? { replace: true as const } : {}),
                       });
                     },
                     onAssistantMessageStart: async () => {
@@ -2769,6 +2770,25 @@ async function runAgentTurnWithFallbackInternal(
                         if (completedMessageToolDelivery) {
                           messageToolOnlyDeliveryToolCallIds.delete(itemToolCallId);
                           messageToolOnlyDeliveryCompleted = true;
+                        }
+                        if (
+                          evt.stream === "assistant" &&
+                          evt.data.replaceable === true &&
+                          params.opts?.supportsPartialReplacementSnapshots === true &&
+                          typeof params.opts.onPartialReply === "function" &&
+                          !params.followupRun.run.silentExpected &&
+                          !shouldSuppressProgressAfterMessageToolDelivery()
+                        ) {
+                          const snapshotText = readStringValue(evt.data.text);
+                          const textForTyping = snapshotText
+                            ? await handlePartialForTyping({ text: snapshotText })
+                            : undefined;
+                          if (textForTyping !== undefined) {
+                            await params.opts.onPartialReply({
+                              text: textForTyping,
+                              replace: true,
+                            });
+                          }
                         }
                         if (
                           evt.stream === "assistant" &&

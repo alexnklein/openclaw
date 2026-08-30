@@ -133,6 +133,8 @@ export type GetReplyOptions = {
    * both lanes at once.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
+  /** The channel can replace an editable preview with cumulative assistant snapshots. */
+  supportsPartialReplacementSnapshots?: boolean;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReasoningStreamPayload) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;

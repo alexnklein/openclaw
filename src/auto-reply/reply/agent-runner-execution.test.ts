@@ -4521,6 +4521,63 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("bridges replaceable embedded assistant snapshots for capable channel previews", async () => {
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "assistant",
+        data: { text: "Coordination draft", delta: "Coordination draft", replaceable: true },
+      });
+      await params.onAgentEvent?.({
+        stream: "assistant",
+        data: {
+          text: "Final answer",
+          delta: "",
+          replace: true,
+          replaceable: true,
+        },
+      });
+      return { payloads: [{ text: "Final answer" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          supportsPartialReplacementSnapshots: true,
+          onPartialReply,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "Coordination draft", replace: true },
+      { text: "Final answer", replace: true },
+    ]);
+  });
+
+  it("keeps replaceable embedded assistant snapshots off append-only previews", async () => {
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "assistant",
+        data: { text: "Provisional", delta: "Provisional", replaceable: true },
+      });
+      return { payloads: [{ text: "Final answer" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: { onPartialReply } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
   it("preserves suppressed item progress when no tool-start callback is registered", async () => {
     const onItemEvent = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

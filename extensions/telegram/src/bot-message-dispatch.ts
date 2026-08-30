@@ -2703,6 +2703,7 @@ export const dispatchTelegramMessage = async ({
                       }
                     : undefined,
                   suppressTyping: isRoomEvent,
+                  supportsPartialReplacementSnapshots: true,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>

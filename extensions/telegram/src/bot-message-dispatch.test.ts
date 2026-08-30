@@ -2353,6 +2353,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
+        expect(replyOptions?.supportsPartialReplacementSnapshots).toBe(true);
         await replyOptions?.onPartialReply?.({
           text: "Working...",
           delta: "Working...",
