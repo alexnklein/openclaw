@@ -4560,6 +4560,120 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it.each(["error-payload", "thrown-error"])(
+    "retains streamed answer text after %s without retaining private reasoning",
+    async (failure) => {
+      const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+        answerMessageId: 2001,
+        reasoningMessageId: 2002,
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "**Evidence found.** Work is incomplete." });
+          if (failure === "thrown-error") {
+            throw new Error("Provider timed out");
+          }
+          await dispatcherOptions.deliver(
+            { text: "Response interrupted: provider timed out.", isError: true },
+            { kind: "final" },
+          );
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({ context: createReasoningStreamContext(), streamMode: "partial" });
+
+      expect(answerDraftStream.update).toHaveBeenCalledWith(
+        "**Evidence found.** Work is incomplete.",
+      );
+      expect(answerDraftStream.stop).toHaveBeenCalled();
+      expect(answerDraftStream.clear).not.toHaveBeenCalled();
+      expect(reasoningDraftStream.clear).toHaveBeenCalled();
+      expect(deliverReplies).toHaveBeenCalled();
+    },
+  );
+
+  it("clears interrupted previews when the spool will retry the dispatch", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onPartialReply?.({ text: "**Evidence found.** Work is incomplete." });
+      throw new Error("Provider connection lost");
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result).toMatchObject({ kind: "failed-retryable" });
+    expect(answerDraftStream.clear).toHaveBeenCalled();
+    expect(answerDraftStream.discard).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("reuses the preview when a provider error is followed by usable final text", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const text = "**Evidence found.** Work is incomplete.";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text });
+        await dispatcherOptions.deliver(
+          { text: "Provider timed out", isError: true },
+          { kind: "final" },
+        );
+        await dispatcherOptions.deliver({ text }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.discard).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(answerDraftStream.messageId()).toBe(2001);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Provider timed out", isError: true });
+  });
+
+  it.each(["unmaterialized", "progress", "tool-error", "non-terminal-warning"])(
+    "does not preserve an interrupted %s draft as an answer",
+    async (scenario) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      if (scenario === "unmaterialized") {
+        answerDraftStream.messageId.mockReturnValue(undefined);
+      }
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          if (scenario === "progress") {
+            await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+            await dispatcherOptions.deliver({ text: "Interim answer" }, { kind: "block" });
+            throw new Error("Provider timed out");
+          }
+          await replyOptions?.onPartialReply?.({ text: "An incomplete answer" });
+          const payload = { text: "Provider or tool error", isError: true };
+          await dispatcherOptions.deliver(
+            scenario === "non-terminal-warning"
+              ? setReplyPayloadMetadata(payload, { nonTerminalToolErrorWarning: true })
+              : payload,
+            { kind: scenario === "tool-error" ? "tool" : "final" },
+          );
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: scenario === "progress" ? "progress" : "partial",
+      });
+
+      expect(answerDraftStream.discard).not.toHaveBeenCalled();
+      expect(answerDraftStream.clear).toHaveBeenCalled();
+    },
+  );
+
   it("falls back to normal send for error payloads and clears the pending stream", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {

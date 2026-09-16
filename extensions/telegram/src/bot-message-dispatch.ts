@@ -1659,6 +1659,7 @@ export const dispatchTelegramMessage = async ({
   let skippedDuplicateAnswerBlockDraftDelivery = false;
   let suppressSilentReplyFallback = false;
   let hadErrorReplyFailureOrSkip = false;
+  let hadTerminalProviderError = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
   let sendDurableFailureFallback:
@@ -1960,6 +1961,32 @@ export const dispatchTelegramMessage = async ({
           receipt: createPreviewMessageReceipt({ id: messageId }),
         },
       });
+    };
+    const retainInterruptedAnswerPreview = async () => {
+      // Preserve an already visible answer on terminal failure. Progress-mode
+      // windows contain activity, and pending fragments have never been shown.
+      const stream = answerLane.stream;
+      if (
+        isDispatchSuperseded() ||
+        // A spooled retry starts a new stream and cannot reuse this preview.
+        (retryDispatchErrors &&
+          !finalAnswerDelivered &&
+          !queuedFinal &&
+          !suppressSilentReplyFallback) ||
+        answerLane.finalized ||
+        streamMode === "progress" ||
+        !stream ||
+        !answerLane.hasStreamedMessage ||
+        activeAnswerDraftIsToolProgressOnly ||
+        !answerLane.lastPartialText.trim() ||
+        (typeof stream.messageId() !== "number" && !stream.sendMayHaveLanded?.())
+      ) {
+        return;
+      }
+      // Cancel pending edits without deleting the visible preview or flushing
+      // new output while an error is being delivered.
+      await stream.discard?.();
+      answerLane.finalized = true;
     };
     const deliverLaneText = createLaneTextDeliverer({
       lanes,
@@ -2345,6 +2372,12 @@ export const dispatchTelegramMessage = async ({
                     }
                     if (payload.isError === true) {
                       hadErrorReplyFailureOrSkip = true;
+                      if (
+                        info.kind === "final" &&
+                        !isReplyPayloadNonTerminalToolErrorWarning(payload)
+                      ) {
+                        hadTerminalProviderError = true;
+                      }
                     }
 
                     const deliverFinalAnswerText = async (
@@ -2361,6 +2394,7 @@ export const dispatchTelegramMessage = async ({
                           payload: answerPayload,
                           infoKind: "final",
                           buttons,
+                          finalizePreview: answerPayload.isError ? false : undefined,
                         });
                       };
                       if (finalAnswerDelivered) {
@@ -2378,6 +2412,9 @@ export const dispatchTelegramMessage = async ({
                         payload: answerPayload,
                         infoKind: "final",
                         buttons,
+                        // An error can precede usable final text. Keep the preview
+                        // available until all payloads settle, then retain or clear it.
+                        finalizePreview: answerPayload.isError ? false : undefined,
                       });
                       if (result.kind !== "skipped") {
                         markProgressFinalDelivered();
@@ -3006,6 +3043,9 @@ export const dispatchTelegramMessage = async ({
     } finally {
       progressDraft.cancel();
       await draftLaneEventQueue;
+      if (dispatchError || hadTerminalProviderError) {
+        await retainInterruptedAnswerPreview();
+      }
       await finalizeSkippedDuplicateAnswerBlockDraft();
       const lanesToCleanup: Array<{ laneName: LaneName; lane: DraftLaneState }> = [
         { laneName: "answer", lane: answerLane },
