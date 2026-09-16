@@ -2,6 +2,7 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
+import { onLlmRequestActivity } from "../../shared/llm-request-activity.js";
 import type { Context, Model, SimpleStreamOptions } from "../types.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
@@ -160,6 +161,33 @@ function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompleti
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it.each(["NO_REPLY", "**A finished answer.**"])(
+    "keeps heartbeat activity separate from answer text: %s",
+    async (answer) => {
+      const controller = new AbortController();
+      const activity = vi.fn();
+      const unsubscribe = onLlmRequestActivity(controller.signal, activity);
+      mockChunksRef.chunks = [
+        { choices: [{ index: 0, delta: {} }] },
+        { choices: [{ index: 0, delta: {} }] },
+        makeTextChunk(answer.slice(0, 3)),
+        makeTextChunk(answer.slice(3)),
+        makeFinishChunk("stop"),
+      ];
+      try {
+        const result = await streamOpenAICompletions(model, context, {
+          apiKey: "sk-test",
+          signal: controller.signal,
+        }).result();
+        expect(result.stopReason).toBe("stop");
+        expect(result.content).toEqual([{ type: "text", text: answer }]);
+        expect(activity).toHaveBeenCalledTimes(5);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
   it("configures the OpenAI SDK client with guarded fetch", async () => {
     mockOpenAIOptionsRef.options = [];
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];

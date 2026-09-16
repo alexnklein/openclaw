@@ -28,6 +28,7 @@ import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
+import { notifyLlmRequestActivity } from "../../shared/llm-request-activity.js";
 import { createReasoningTagTextPartitioner } from "../../shared/text/reasoning-tag-text-partitioner.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
@@ -386,6 +387,10 @@ export const streamOpenAICompletions: StreamFunction<
         if (!chunk || typeof chunk !== "object") {
           continue;
         }
+
+        // Empty activity chunks keep tool-running providers alive without
+        // adding heartbeat markers to text, reasoning, or silent replies.
+        notifyLlmRequestActivity(options?.signal);
 
         // OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
         // and each chunk in a streamed completion carries the same id.
