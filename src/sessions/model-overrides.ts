@@ -36,6 +36,10 @@ export function applyModelOverrideToSessionEntry(params: {
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
   let updated = false;
+  if (entry.modelOverrideLease && (selectionSource === "user" || selection.isDefault)) {
+    delete entry.modelOverrideLease;
+    updated = true;
+  }
   let selectionUpdated = false;
   let profileUpdated = false;
 

@@ -90,6 +90,7 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { createAutoModelLease } from "../../sessions/model-override-lease.js";
 import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -435,6 +436,7 @@ type FallbackSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideLease"
   | "modelOverrideSource"
   | "modelOverrideFallbackOriginProvider"
   | "modelOverrideFallbackOriginModel"
@@ -446,6 +448,7 @@ type FallbackSelectionState = Pick<
 const FALLBACK_SELECTION_STATE_KEYS = [
   "providerOverride",
   "modelOverride",
+  "modelOverrideLease",
   "modelOverrideSource",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",
@@ -469,6 +472,12 @@ function setFallbackSelectionStateField(
     case "modelOverride":
       if (entry.modelOverride !== value) {
         entry.modelOverride = value as SessionEntry["modelOverride"];
+        return true;
+      }
+      return false;
+    case "modelOverrideLease":
+      if (entry.modelOverrideLease !== value) {
+        entry.modelOverrideLease = value as SessionEntry["modelOverrideLease"];
         return true;
       }
       return false;
@@ -520,6 +529,7 @@ function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionS
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
     modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideLease: entry.modelOverrideLease,
     modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
     modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
     authProfileOverride: entry.authProfileOverride,
@@ -540,6 +550,7 @@ function buildFallbackSelectionState(params: {
   model: string;
   originProvider: string;
   originModel: string;
+  now?: number;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 }): FallbackSelectionState {
@@ -547,6 +558,7 @@ function buildFallbackSelectionState(params: {
     providerOverride: params.provider,
     modelOverride: params.model,
     modelOverrideSource: "auto",
+    modelOverrideLease: createAutoModelLease(params.now),
     modelOverrideFallbackOriginProvider: params.originProvider,
     modelOverrideFallbackOriginModel: params.originModel,
     authProfileOverride: params.authProfileId,
@@ -600,6 +612,7 @@ export function applyFallbackCandidateSelectionToEntry(params: {
   const nextState = buildFallbackSelectionState({
     provider: params.provider,
     model: params.model,
+    now: params.now,
     originProvider: origin.provider,
     originModel: origin.model,
     authProfileId: scopedAuthProfile.authProfileId,
@@ -2046,6 +2059,7 @@ async function runAgentTurnWithFallbackInternal(
           providerOverride: undefined,
           modelOverride: undefined,
           modelOverrideSource: undefined,
+          modelOverrideLease: undefined,
           modelOverrideFallbackOriginProvider: undefined,
           modelOverrideFallbackOriginModel: undefined,
           ...(shouldClearAuthProfile

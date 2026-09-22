@@ -61,6 +61,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "modelOverride",
   "agentRuntimeOverride",
   "modelOverrideSource",
+  "modelOverrideLease",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",
   "authProfileOverride",
