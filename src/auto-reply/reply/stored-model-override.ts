@@ -9,6 +9,7 @@ import {
 } from "../../agents/model-selection.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { isAutoModelLeaseExpired } from "../../sessions/model-override-lease.js";
 
 /** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
@@ -50,7 +51,7 @@ export function resolveStoredModelOverride(params: {
     overrideProvider: directOverride.providerOverride,
     overrideModel: directOverride.modelOverride,
   });
-  if (direct) {
+  if (direct && !isAutoModelLeaseExpired(params.sessionEntry)) {
     return { ...direct, source: "session" };
   }
   const parentKey = resolveParentSessionKeyCandidate({
@@ -70,7 +71,7 @@ export function resolveStoredModelOverride(params: {
     overrideProvider: normalizedParentOverride.providerOverride,
     overrideModel: normalizedParentOverride.modelOverride,
   });
-  if (!parentOverride) {
+  if (!parentOverride || isAutoModelLeaseExpired(parentEntry)) {
     return null;
   }
   return { ...parentOverride, source: "parent" };

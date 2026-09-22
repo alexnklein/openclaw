@@ -33,6 +33,10 @@ import {
 } from "../../agents/openai-routing.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createAutoModelLease,
+  isAutoModelLeaseExpired,
+} from "../../sessions/model-override-lease.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ThinkLevel } from "./directives.js";
@@ -184,6 +188,18 @@ export async function createModelSelectionState(params: {
     defaultModel,
   } = params;
 
+  // Give legacy automatic preferences one bounded lease. User pins are untouched.
+  if (sessionEntry?.modelOverrideSource === "auto" && !sessionEntry.modelOverrideLease) {
+    sessionEntry.modelOverrideLease = createAutoModelLease(sessionEntry.updatedAt || 0);
+    if (storePath && sessionKey) {
+      const { patchSessionEntry } = await loadSessionAccessorRuntime();
+      await patchSessionEntry({ storePath, sessionKey }, (current) =>
+        current.modelOverrideSource === "auto" && !current.modelOverrideLease
+          ? { modelOverrideLease: sessionEntry.modelOverrideLease }
+          : null,
+      );
+    }
+  }
   let provider = params.provider;
   let model = params.model;
   const primaryProvider = params.primaryProvider ?? defaultProvider;
@@ -268,6 +284,7 @@ export async function createModelSelectionState(params: {
     modelKey(normalizedCurrentSelection.provider, normalizedCurrentSelection.model) !==
       modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model);
   const staleDirectStoredOverride =
+    isAutoModelLeaseExpired(sessionEntry) ||
     staleHeartbeatAutoFallbackOverride ||
     staleLegacyOpenAICodexAutoOverride ||
     staleLegacyAutoFallbackWithoutOrigin;

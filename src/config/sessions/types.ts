@@ -331,6 +331,13 @@ export type SessionEntry = {
    * Resets only preserve user-driven overrides.
    */
   modelOverrideSource?: "auto" | "user";
+  /** Bounded automatic fallback preference; explicit user overrides do not use this lease. */
+  modelOverrideLease?: {
+    createdAt: number;
+    expiresAt: number;
+    policyVersion: string;
+    reason: "runtime-fallback";
+  };
   /** Selected model that produced the current auto fallback override. */
   modelOverrideFallbackOriginProvider?: string;
   modelOverrideFallbackOriginModel?: string;
