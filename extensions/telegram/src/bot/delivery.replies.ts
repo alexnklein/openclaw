@@ -42,6 +42,11 @@ import {
   wrapFileReferencesInHtml,
 } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
+import {
+  renderTelegramModelIdentityMarkdown,
+  resolveTelegramModelIdentity,
+  type TelegramModelIdentity,
+} from "../model-identity.js";
 import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
 import { isTelegramHtmlParseError } from "../rich-plain-fallback.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
@@ -73,6 +78,7 @@ type DeliveryProgress = ReplyThreadDeliveryProgress & {
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
+  modelIdentity?: TelegramModelIdentity;
   reaction?: {
     emoji?: unknown;
   };
@@ -1001,6 +1007,27 @@ export async function deliverReplies(params: {
       );
       let firstDeliveredMessageId: number | undefined;
       let deliveryReply = reply;
+      const hasModelIdentity = telegramData != null && Object.hasOwn(telegramData, "modelIdentity");
+      const modelIdentity = resolveTelegramModelIdentity(
+        telegramData?.modelIdentity
+          ? {
+              provider: telegramData.modelIdentity.provider,
+              model: telegramData.modelIdentity.model,
+              thinkLevel: telegramData.modelIdentity.effort,
+            }
+          : undefined,
+      );
+      if (
+        params.richMessages === true &&
+        hasModelIdentity &&
+        !reactionEmoji &&
+        deliveryReply.text
+      ) {
+        deliveryReply = {
+          ...deliveryReply,
+          text: `${renderTelegramModelIdentityMarkdown(modelIdentity)}\n\n${deliveryReply.text}`,
+        };
+      }
       let deliveryMediaList = mediaList;
       let deliveryMediaLocalRoots = params.mediaLocalRoots;
       if (

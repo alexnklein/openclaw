@@ -1367,6 +1367,71 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("renders runtime model identity on rich answer cards", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Fallback worked",
+          channelData: {
+            telegram: {
+              modelIdentity: {
+                provider: "anthropic",
+                model: "claude-opus-5",
+                effort: "max",
+              },
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as {
+      sendRichMessage: ReturnType<typeof vi.fn>;
+    };
+    const richMessage = raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(JSON.stringify(richMessage)).toContain("model_identity");
+    expect(JSON.stringify(richMessage)).toContain("anthropic/claude-opus-5");
+    expect(JSON.stringify(richMessage)).toContain("effort max");
+  });
+
+  it("renders unknown when answer-card runtime identity is unproved", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Runtime unavailable",
+          channelData: { telegram: { modelIdentity: undefined } },
+        },
+      ],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as {
+      sendRichMessage: ReturnType<typeof vi.fn>;
+    };
+    const richMessage = raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(JSON.stringify(richMessage)).toContain("model_identity");
+    expect(JSON.stringify(richMessage)).toContain("unknown");
+  });
+
   it("falls back to plain text when a rich message is rejected for an invalid entity", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
