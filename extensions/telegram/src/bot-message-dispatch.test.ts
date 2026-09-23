@@ -3096,6 +3096,70 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("rewrites the same rich card when runtime fallback changes model identity", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const pipelineOnModelSelected = vi.fn();
+    createChannelMessageReplyPipeline.mockReturnValue({
+      responsePrefix: undefined,
+      responsePrefixContextProvider: () => ({ identityName: undefined }),
+      onModelSelected: pipelineOnModelSelected,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        replyOptions?.onModelSelected?.({
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          thinkLevel: "high",
+        });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await replyOptions?.onItemEvent?.({
+          kind: "command",
+          name: "exec",
+          progressText: "git status --short",
+        });
+        replyOptions?.onModelSelected?.({
+          provider: "anthropic",
+          model: "claude-opus-5",
+          thinkLevel: "max",
+        });
+        await dispatcherOptions.deliver({ text: "Fallback worked" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { richMessages: true, streaming: { mode: "progress" } },
+    });
+
+    const previews = answerDraftStream.updatePreview.mock.calls.map((call) =>
+      JSON.stringify(call[0]),
+    );
+    expect(previews.some((preview) => preview.includes("openai/gpt-5.6-sol"))).toBe(true);
+    expect(previews.some((preview) => preview.includes("anthropic/claude-opus-5"))).toBe(true);
+    expect(pipelineOnModelSelected).toHaveBeenCalledTimes(2);
+    const fallbackPreviewIndex = previews.findIndex((preview) =>
+      preview.includes("anthropic/claude-opus-5"),
+    );
+    expect(fallbackPreviewIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      answerDraftStream.updatePreview.mock.invocationCallOrder[fallbackPreviewIndex],
+    ).toBeLessThan(answerDraftStream.forceNewMessage.mock.invocationCallOrder[0]);
+    expectDeliveredReply(0, {
+      text: "Fallback worked",
+      channelData: {
+        telegram: {
+          modelIdentity: {
+            provider: "anthropic",
+            model: "claude-opus-5",
+            effort: "max",
+          },
+        },
+      },
+    });
+  });
+
   function allDeliveredReplyTexts(): string[] {
     return deliverReplies.mock.calls.flatMap((call: unknown[]) =>
       ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(

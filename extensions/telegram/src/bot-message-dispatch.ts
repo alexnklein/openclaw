@@ -118,6 +118,13 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import {
+  renderTelegramModelIdentityHtml,
+  renderTelegramModelIdentityMarkdown,
+  resolveTelegramModelIdentity,
+  type TelegramModelIdentity,
+  withTelegramModelIdentity,
+} from "./model-identity.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import {
   recordOutboundMessageForPromptContext,
@@ -464,6 +471,7 @@ function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
   richMessages: boolean,
+  modelIdentity: TelegramModelIdentity | undefined,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);
@@ -481,7 +489,13 @@ function renderTelegramProgressDraftPreview(
   }
   return {
     text: trimmed,
-    richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
+    richMessage: buildTelegramRichHtml(
+      [
+        renderTelegramModelIdentityHtml(modelIdentity, escapeTelegramProgressHtml),
+        ...htmlParts,
+      ].join("<br>"),
+      { skipEntityDetection: true },
+    ),
   };
 }
 
@@ -892,19 +906,25 @@ export const dispatchTelegramMessage = async ({
     accountId: route.accountId,
     supportsBlockTables: telegramCfg.richMessages === true,
   });
-  const renderStreamText = (text: string): TelegramDraftPreview =>
-    telegramCfg.richMessages === true
+  let activeModelIdentity: TelegramModelIdentity | undefined;
+  const renderStreamText = (text: string, includeModelIdentity = false): TelegramDraftPreview => {
+    const renderedText =
+      includeModelIdentity && telegramCfg.richMessages === true
+        ? `${renderTelegramModelIdentityMarkdown(activeModelIdentity)}\n\n${text}`
+        : text;
+    return telegramCfg.richMessages === true
       ? {
           text,
-          richMessage: buildTelegramRichMarkdown(text, {
+          richMessage: buildTelegramRichMarkdown(renderedText, {
             tableMode,
             skipEntityDetection: telegramCfg.linkPreview === false,
           }),
         }
       : {
-          text: renderTelegramHtmlText(text, { tableMode }),
+          text: renderTelegramHtmlText(renderedText, { tableMode }),
           parseMode: "HTML",
         };
+  };
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
@@ -1015,7 +1035,7 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           richMessages: telegramCfg.richMessages,
           minInitialChars: draftMinInitialChars,
-          renderText: renderStreamText,
+          renderText: (text) => renderStreamText(text, laneName === "answer"),
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {
               const lane = lanes[laneName];
@@ -1097,6 +1117,9 @@ export const dispatchTelegramMessage = async ({
   // collapse summary must reflect what ACTUALLY streamed, so it is gated on
   // this flag, not on the compositor gate having started (Bug 6).
   let progressDraftEverRendered = false;
+  let lastProgressDraftSnapshot:
+    | { text: string; lines: readonly ChannelProgressDraftCompositorLine[] }
+    | undefined;
   // Turn-activity tally for the post-turn collapse summary (Discord parity).
   // Counters feed a one-line digest posted when the progress window collapses.
   const progressSummaryStartedAt = Date.now();
@@ -1121,10 +1144,12 @@ export const dispatchTelegramMessage = async ({
       answerLane.lastPartialText = streamText;
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
+      lastProgressDraftSnapshot = { text: streamText, lines: options?.lines ?? [] };
       const progressPreview = renderTelegramProgressDraftPreview(
         streamText,
         options?.lines ?? [],
         telegramCfg.richMessages === true,
+        activeModelIdentity,
       );
       const progressPreviewLength =
         progressPreview.richMessage?.html?.length ??
@@ -1218,6 +1243,32 @@ export const dispatchTelegramMessage = async ({
       logVerbose(`telegram: draft lane callback failed: ${String(err)}`);
     });
     return draftLaneEventQueue;
+  };
+  const refreshVisibleModelIdentity = async () => {
+    if (!answerLane.stream || !answerLane.hasStreamedMessage) {
+      return;
+    }
+    if (activeAnswerDraftIsToolProgressOnly && lastProgressDraftSnapshot) {
+      const snapshot = lastProgressDraftSnapshot;
+      answerLane.stream.updatePreview(
+        renderTelegramProgressDraftPreview(
+          snapshot.text,
+          snapshot.lines,
+          telegramCfg.richMessages === true,
+          activeModelIdentity,
+        ),
+        snapshot.text,
+      );
+      await answerLane.stream.flush();
+      return;
+    }
+    if (answerLane.lastPartialText.trim()) {
+      answerLane.stream.updatePreview(
+        renderStreamText(answerLane.lastPartialText, true),
+        answerLane.lastPartialText,
+      );
+      await answerLane.stream.flush();
+    }
   };
   type SplitLaneSegment = { lane: LaneName; update: DraftPartialTextUpdate };
   type SplitLaneSegmentsResult = {
@@ -1772,10 +1823,14 @@ export const dispatchTelegramMessage = async ({
         options?.durable && deliverablePayload.text
           ? await resolvePromptContextTimestampMs(deliverablePayload.text)
           : undefined;
-      const effectivePayload = withTelegramPromptContextTimestampMs(
+      const timestampedPayload = withTelegramPromptContextTimestampMs(
         deliverablePayload,
         promptContextTimestampMs,
       );
+      const effectivePayload =
+        telegramCfg.richMessages === true
+          ? withTelegramModelIdentity(timestampedPayload, activeModelIdentity)
+          : timestampedPayload;
       const silent = options?.silent ?? (silentErrorReplies && payload.isError === true);
       const durableDelivery = telegramDeps.deliverInboundReplyWithMessageSendContext;
       if (options?.durable && durableDelivery) {
@@ -2126,7 +2181,7 @@ export const dispatchTelegramMessage = async ({
     // previews so a still-pending tool-progress window is materialized and
     // edited rather than missed.
     const applyProgressCollapseSummary = async (line: string): Promise<"edited" | "posted"> => {
-      const messageId = await answerLane.stream?.finalizeToPreview(renderStreamText(line));
+      const messageId = await answerLane.stream?.finalizeToPreview(renderStreamText(line, true));
       if (typeof messageId === "number") {
         return "edited";
       }
@@ -2265,6 +2320,15 @@ export const dispatchTelegramMessage = async ({
         },
       },
     });
+    const onTelegramModelSelected = (selection: {
+      provider: string;
+      model: string;
+      thinkLevel: string | undefined;
+    }) => {
+      onModelSelected(selection);
+      activeModelIdentity = resolveTelegramModelIdentity(selection);
+      void enqueueDraftLaneEvent(refreshVisibleModelIdentity);
+    };
 
     try {
       const turnResult = await runChannelInboundEvent({
@@ -2989,7 +3053,7 @@ export const dispatchTelegramMessage = async ({
                         await statusReactionController.setThinking();
                       }
                     : undefined,
-                  onModelSelected,
+                  onModelSelected: onTelegramModelSelected,
                 },
               });
             },
