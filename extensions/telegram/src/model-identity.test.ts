@@ -35,6 +35,12 @@ describe("Telegram model identity", () => {
     );
   });
 
+  it("uses a longer Markdown code delimiter when identity contains backticks", () => {
+    expect(renderTelegramModelIdentityMarkdown({ provider: "openai", model: "gpt`test" })).toBe(
+      "**model_identity** ``openai/gpt`test``",
+    );
+  });
+
   it("adds delivery metadata without changing answer text", () => {
     const payload = withTelegramModelIdentity(
       { text: "Answer", channelData: { telegram: { pin: true } } },

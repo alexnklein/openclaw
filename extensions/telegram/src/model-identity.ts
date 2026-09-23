@@ -43,8 +43,10 @@ export function formatTelegramModelIdentity(identity: TelegramModelIdentity | un
 export function renderTelegramModelIdentityMarkdown(
   identity: TelegramModelIdentity | undefined,
 ): string {
-  const value = formatTelegramModelIdentity(identity).replaceAll("`", "\\`");
-  return `**model_identity** \`${value}\``;
+  const value = formatTelegramModelIdentity(identity);
+  const longestBacktickRun = Math.max(0, ...(value.match(/`+/gu)?.map((run) => run.length) ?? []));
+  const delimiter = "`".repeat(longestBacktickRun + 1);
+  return `**model_identity** ${delimiter}${value}${delimiter}`;
 }
 
 export function renderTelegramModelIdentityHtml(
