@@ -533,6 +533,7 @@ export function buildInboundMetaSystemPrompt(
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
+  options?: { omitDirectChatWindowHistory?: boolean },
 ): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
@@ -554,9 +555,14 @@ export function buildInboundUserContextPrefix(
     0,
   );
   const replyChainPayload = buildReplyChainPayload(ctx);
-  const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
-    ? ctx.UntrustedStructuredContext
-    : [];
+  // A resumed direct thread already owns its selected conversation window.
+  // Keep pending InboundHistory, reply targets, and unrelated structured context.
+  const structuredContext = (
+    Array.isArray(ctx.UntrustedStructuredContext) ? ctx.UntrustedStructuredContext : []
+  ).filter(
+    (entry) =>
+      !(isDirect && options?.omitDirectChatWindowHistory && isChatWindowHistoryContext(entry)),
+  );
   const chatWindowMessageIds = collectChatWindowMessageIds(structuredContext);
   const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
   const chatWindowCoversReplyContext =

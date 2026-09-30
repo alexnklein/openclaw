@@ -754,16 +754,19 @@ export async function runPreparedReply(
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const inboundUserContext = buildInboundUserContextPrefix(
-    isNewSession
-      ? {
-          ...sessionCtx,
-          ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
-            ? { InboundHistory: undefined, ThreadStarterBody: undefined }
-            : {}),
-        }
-      : { ...sessionCtx, ThreadStarterBody: undefined },
+  const inboundContext = isNewSession
+    ? {
+        ...sessionCtx,
+        ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
+          ? { InboundHistory: undefined, ThreadStarterBody: undefined }
+          : {}),
+      }
+    : { ...sessionCtx, ThreadStarterBody: undefined };
+  const inboundUserContext = buildInboundUserContextPrefix(inboundContext, envelopeOptions);
+  const resumableInboundUserContext = buildInboundUserContextPrefix(
+    inboundContext,
     envelopeOptions,
+    { omitDirectChatWindowHistory: true },
   );
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
@@ -791,6 +794,7 @@ export async function runPreparedReply(
     baseBody: baseBodyFinal,
     hasUserBody,
     inboundUserContext,
+    resumableInboundUserContext,
     inboundUserContextPromptJoiner,
     isBareSessionReset,
     startupAction,
@@ -873,6 +877,7 @@ export async function runPreparedReply(
       prefixedBody: prefixedBodyCore,
       hasUserBody,
       inboundUserContext,
+      resumableInboundUserContext,
       inboundUserContextPromptJoiner,
       isBareSessionReset,
       startupAction,

@@ -121,6 +121,33 @@ describe("buildReplyPromptEnvelope", () => {
     },
   );
 
+  it("carries compact direct context without losing delivery rules or full recovery context", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "edit it",
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "edit it",
+      hasUserBody: true,
+      inboundUserContext: "selected history and reply target",
+      resumableInboundUserContext: "reply target",
+      inboundUserContextPromptJoiner: " ",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "user_request",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(envelope.currentInboundContext?.text).toContain("selected history and reply target");
+    expect(envelope.currentInboundContext?.resumableText).toBe(
+      `reply target\n\n${MESSAGE_TOOL_ONLY_DELIVERY_HINT}`,
+    );
+    expect(envelope.currentInboundContext?.promptJoiner).toBe(" ");
+    expect(envelope.transcriptCommandBody).toBe("edit it");
+  });
+
   it("projects room events as context instead of user requests", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "No wtf",

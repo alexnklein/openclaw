@@ -1446,6 +1446,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 400_000;
+    params.currentInboundContext = {
+      text: "full recovery history",
+      resumableText: "current context",
+    };
 
     const run = runCodexAppServerAttempt(params);
     await vi.waitFor(() =>
@@ -1474,7 +1478,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(compact).not.toHaveBeenCalled();
     expect(assemble).toHaveBeenCalledTimes(1);
     const retryInputText = getRequestInputTextAt(harness, -1);
-    expect(retryInputText).toBe("hello");
+    expect(getRequestInputTextAt(harness, 0)).toBe("current context\n\nhello");
+    expect(retryInputText).toBe("full recovery history\n\nhello");
     expect(retryInputText).not.toContain("successor compacted context");
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-fresh");
