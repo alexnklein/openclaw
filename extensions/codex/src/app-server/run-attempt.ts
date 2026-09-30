@@ -1104,9 +1104,14 @@ export async function runCodexAppServerAttempt(
   // OpenClaw transcript is persistence/search state. Context-engine output is
   // rendered into the prompt/developer instructions, not parallel history.
   const codexModelInputHistoryMessages: typeof historyMessages = [];
+  let preferResumableInboundContext = false;
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
-      prompt: prependCurrentInboundContext(promptText, params.currentInboundContext),
+      prompt: prependCurrentInboundContext(
+        promptText,
+        params.currentInboundContext,
+        preferResumableInboundContext,
+      ),
       developerInstructions,
       messages: codexModelInputHistoryMessages,
       ctx: hookContext,
@@ -1613,7 +1618,17 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
-  if (applyNoContextEngineContinuityProjection(thread.lifecycle.action, thread)) {
+  // Only a confirmed resume owns the previous conversation. Missing-thread
+  // recovery must retain the full inbound context on the replacement thread.
+  preferResumableInboundContext = thread.lifecycle.action === "resumed";
+  const continuityChanged = applyNoContextEngineContinuityProjection(
+    thread.lifecycle.action,
+    thread,
+  );
+  if (
+    continuityChanged ||
+    (preferResumableInboundContext && params.currentInboundContext?.resumableText !== undefined)
+  ) {
     await rebuildCodexTurnPromptTextFromCurrentProjection();
   }
   trajectoryRecorder?.recordEvent("session.started", {
@@ -2774,6 +2789,13 @@ export async function runCodexAppServerAttempt(
           );
         } else {
           thread = await restartContextEngineCodexThread();
+          if (
+            preferResumableInboundContext &&
+            params.currentInboundContext?.resumableText !== undefined
+          ) {
+            preferResumableInboundContext = false;
+            await rebuildCodexTurnPromptTextFromCurrentProjection();
+          }
           // The fresh retry thread was not bootstrapped with the
           // context-engine projection. Clear the stale projection from
           // the saved binding so the next run will re-project instead
@@ -3703,9 +3725,12 @@ function joinPresentSections(...sections: Array<string | undefined>): string {
 function prependCurrentInboundContext(
   prompt: string,
   context: EmbeddedRunAttemptParams["currentInboundContext"],
+  preferResumableText = false,
 ): string {
-  const text = context?.text.trim();
-  return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
+  const text = (
+    preferResumableText ? (context?.resumableText ?? context?.text) : context?.text
+  )?.trim();
+  return text ? [text, prompt].filter(Boolean).join(context?.promptJoiner ?? "\n\n") : prompt;
 }
 
 function waitForCodexNotificationDispatchTurn(): Promise<void> {

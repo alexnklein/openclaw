@@ -106,6 +106,7 @@ type ReplyPromptEnvelopeBaseParams = {
   baseBody: string;
   hasUserBody: boolean;
   inboundUserContext: string;
+  resumableInboundUserContext?: string;
   inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
   isBareSessionReset: boolean;
   startupAction: ReplyPromptEnvelopeStartupAction;
@@ -241,7 +242,15 @@ export function buildReplyPromptEnvelopeBase(
     !params.isBareSessionReset && currentInboundContextText
       ? {
           text: currentInboundContextText,
-          ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
+          ...((resumableRoomEventContext ?? params.resumableInboundUserContext) !== undefined
+            ? {
+                resumableText:
+                  resumableRoomEventContext ??
+                  [params.resumableInboundUserContext, userRequestDeliveryDirective]
+                    .filter(Boolean)
+                    .join("\n\n"),
+              }
+            : {}),
           promptJoiner: params.inboundUserContextPromptJoiner,
         }
       : undefined;

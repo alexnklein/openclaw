@@ -1294,3 +1294,49 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("private-token");
   });
 });
+
+describe("resumed direct-message context", () => {
+  it("omits selected history but keeps pending messages, replies and other context", () => {
+    const ctx = {
+      Provider: "telegram",
+      ChatType: "direct",
+      MessageSid: "103",
+      ReplyToId: "101",
+      ReplyToBody: "the specific draft",
+      SenderId: "user-1",
+      InboundHistory: [{ sender: "user-1", body: "unprocessed follow-up", timestamp: 1 }],
+      UntrustedStructuredContext: [
+        {
+          source: "telegram",
+          type: "chat_window",
+          label: "history",
+          payload: {
+            relation: "selected_for_current_message",
+            order: "chronological",
+            messages: [{ message_id: "101", sender: "user-1", body: "old selected history" }],
+          },
+        },
+        {
+          source: "telegram",
+          type: "other",
+          label: "attachment",
+          payload: { name: "current.pdf" },
+        },
+      ],
+    } as TemplateContext;
+    const full = buildInboundUserContextPrefix(ctx);
+    const resumed = buildInboundUserContextPrefix(ctx, undefined, {
+      omitDirectChatWindowHistory: true,
+    });
+    expect(full).toContain("old selected history");
+    expect(resumed).not.toContain("old selected history");
+    expect(resumed).toContain("unprocessed follow-up");
+    expect(resumed).toContain("the specific draft");
+    expect(resumed).toContain("current.pdf");
+    expect(
+      buildInboundUserContextPrefix({ ...ctx, ChatType: "group" }, undefined, {
+        omitDirectChatWindowHistory: true,
+      }),
+    ).toContain("old selected history");
+  });
+});

@@ -2554,6 +2554,11 @@ describe("runCodexAppServerAttempt", () => {
     const secondHarness = createResumeHarness();
     const secondParams = createParams(sessionFile, workspaceDir);
     secondParams.prompt = "continue from there";
+    secondParams.currentInboundContext = {
+      text: "old selected history\nCurrent message: reply target",
+      resumableText: "Current message: reply target",
+      promptJoiner: " ",
+    };
     const secondRun = runCodexAppServerAttempt(secondParams);
     await secondHarness.waitForMethod("turn/start");
     await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
@@ -2569,6 +2574,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(secondInputText).not.toContain("we were discussing the Sonnet leak screenshots");
     expect(secondInputText).not.toContain("is the previous message trustworthy?");
     expect(secondInputText).toContain("continue from there");
+    expect(secondInputText).not.toContain("old selected history");
+    expect(secondInputText).toContain("Current message: reply target continue from there");
   });
 
   it("passes stable workspace files as Codex developer instructions and routes MEMORY.md through tools", async () => {
