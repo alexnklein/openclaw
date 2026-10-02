@@ -13,6 +13,13 @@ const PROGRESS_ONLY_PATTERN =
 const BARE_PROGRESS_ONLY_PATTERN =
   /^(?:analyz(?:e|ing)|check(?:ing)?|debug(?:ging)?|inspect(?:ing)?|investigat(?:e|ing)|look(?:ing)?\s+into|map(?:ping)?|read(?:ing)?|report(?:ing)?\s+back|review(?:ing)?|run(?:ning)?|test(?:ing)?|trac(?:e|ing)|verify(?:ing)?|work(?:ing)?\s+on)\b/i;
 
+// A sentence that opens with a bare work verb but reports an outcome is a result,
+// not a promise: "Review and drafts done.", "Tests pass.", "Checks verified."
+// Without this, a complete answer whose last sentence happens to start with
+// "Review"/"Test"/"Run"/... is rejected as progress-only and discarded.
+const BARE_RESULT_MARKER_PATTERN =
+  /\b(?:done|complete(?:d)?|finished|blocked|pass(?:ed|es)?|fail(?:ed|s)?|saved|sent|merged|verified|confirmed|ready|live|green|ok)\b/i;
+
 const FOLLOW_UP_PLANNING_PREFIX_PATTERN =
   /^(?:after(?:wards|\s+that)?|from\s+there|next|once\s+(?:done|that(?:'|\u2019)?s\s+done|that\s+is\s+done)|then)[,.\s]+/i;
 
@@ -31,14 +38,18 @@ function normalizeCompletionFailureReason(value: string | null | undefined): str
   return normalized.length <= 160 ? normalized : `${normalized.slice(0, 159)}...`;
 }
 
+function matchesBareProgressOnly(value: string): boolean {
+  return BARE_PROGRESS_ONLY_PATTERN.test(value) && !BARE_RESULT_MARKER_PATTERN.test(value);
+}
+
 function matchesProgressOnlyPrefix(value: string): boolean {
-  if (PROGRESS_ONLY_PATTERN.test(value) || BARE_PROGRESS_ONLY_PATTERN.test(value)) {
+  if (PROGRESS_ONLY_PATTERN.test(value) || matchesBareProgressOnly(value)) {
     return true;
   }
   const followup = value.replace(FOLLOW_UP_PLANNING_PREFIX_PATTERN, "").trim();
   return (
     followup !== value &&
-    (PROGRESS_ONLY_PATTERN.test(followup) || BARE_PROGRESS_ONLY_PATTERN.test(followup))
+    (PROGRESS_ONLY_PATTERN.test(followup) || matchesBareProgressOnly(followup))
   );
 }
 

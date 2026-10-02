@@ -38,7 +38,10 @@ import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js"
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
-import { endsWithProgressOnlyCompletionText } from "../../tasks/task-completion-contract.js";
+import {
+  endsWithProgressOnlyCompletionText,
+  isProgressOnlyCompletionText,
+} from "../../tasks/task-completion-contract.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -3851,7 +3854,13 @@ async function runEmbeddedAgentInternal(
             ["end_turn", "stop"].includes(
               (sessionLastAssistant?.stopReason ?? "").trim().toLowerCase(),
             ) &&
-            endsWithProgressOnlyCompletionText(finalAssistantVisibleText);
+            endsWithProgressOnlyCompletionText(finalAssistantVisibleText) &&
+            // While a retry is still available, any promise-ending turn is retried.
+            // Once the budget is spent, only a turn that is *nothing but* a promise is
+            // replaced by the incomplete-turn card; a substantive answer that merely
+            // ends on a promise sentence is delivered rather than discarded.
+            (progressOnlyCompletionRetryAttempts < MAX_PROGRESS_ONLY_COMPLETION_RETRIES ||
+              isProgressOnlyCompletionText(finalAssistantVisibleText));
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
             payloadCount,
