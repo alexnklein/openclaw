@@ -2240,7 +2240,10 @@ export async function runCodexAppServerAttempt(
         projector.recordNativeToolOutcome(nativeItem);
       }
     }
-    if (notificationMatchesActiveTurn && !isUserMessageIntakeNotification(notification)) {
+    if (
+      notificationMatchesActiveTurn &&
+      !isUserMessageIntakeNotification(notification, { currentPromptTexts: [codexTurnPromptText] })
+    ) {
       const finalizationHookNotification = readCodexFinalizationHookNotification(
         notification,
         thread.threadId,

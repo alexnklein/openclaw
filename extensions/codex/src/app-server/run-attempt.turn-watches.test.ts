@@ -322,6 +322,21 @@ describe("applyCodexTurnNotificationState", () => {
     expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
   });
 
+  it("treats steering user messages as active turn progress", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-1",
+        type: "userMessage",
+        content: [{ type: "text", text: "late steer" }],
+      }),
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
+      details: { lastNotificationMethod: "item/started" },
+      attemptProgress: true,
+    });
+  });
+
   it("ignores completed app-server user intake", () => {
     const { turnWatches } = applyNotificationStateForTest(
       itemNotification("item/completed", {
@@ -3376,22 +3391,30 @@ describe("runCodexAppServerAttempt turn watches", () => {
     {
       name: "legacy typed item",
       notifications: [
-        itemNotification("item/started", { id: "user-message-1", type: "UserMessage" }),
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "UserMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
         itemNotification("item/completed", {
           id: "user-message-1",
           type: "UserMessage",
-          text: "run status",
+          text: "hello",
         }),
       ],
     },
     {
       name: "current typed item",
       notifications: [
-        itemNotification("item/started", { id: "user-message-1", type: "userMessage" }),
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
         itemNotification("item/completed", {
           id: "user-message-1",
           type: "userMessage",
-          text: "run status",
+          text: "hello",
         }),
       ],
     },
@@ -3406,7 +3429,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
             item: {
               type: "message",
               role: "user",
-              content: [{ type: "input_text", text: "run status" }],
+              content: [{ type: "input_text", text: "hello" }],
             },
           },
         },
@@ -3484,11 +3507,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
         itemNotification("item/started", {
           id: "user-message-1",
           type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
         }),
         itemNotification("item/completed", {
           id: "user-message-1",
           type: "userMessage",
-          text: "run status",
+          text: "hello",
         }),
       ],
       {
@@ -3509,11 +3533,15 @@ describe("runCodexAppServerAttempt turn watches", () => {
     {
       name: "assistant output stalls after user intake",
       notifications: [
-        itemNotification("item/started", { id: "user-message-1", type: "userMessage" }),
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
         itemNotification("item/completed", {
           id: "user-message-1",
           type: "userMessage",
-          text: "run status",
+          text: "hello",
         }),
         {
           method: "item/agentMessage/delta",
@@ -3541,11 +3569,15 @@ describe("runCodexAppServerAttempt turn watches", () => {
     {
       name: "tool completion stalls after user intake",
       notifications: [
-        itemNotification("item/started", { id: "user-message-1", type: "userMessage" }),
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
         itemNotification("item/completed", {
           id: "user-message-1",
           type: "userMessage",
-          text: "run status",
+          text: "hello",
         }),
         startedCommand("cmd-1", "touch done.txt"),
         completedCommand("cmd-1", "touch done.txt"),

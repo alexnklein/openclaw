@@ -144,7 +144,10 @@ export function isAssistantCommentaryCompletionNotification(
 }
 
 /** Returns true for prompt-intake user item lifecycle notifications. */
-export function isUserMessageIntakeNotification(notification: CodexServerNotification): boolean {
+export function isUserMessageIntakeNotification(
+  notification: CodexServerNotification,
+  options: { currentPromptText?: string; currentPromptTexts?: readonly string[] } = {},
+): boolean {
   if (
     notification.method !== "item/started" &&
     notification.method !== "item/completed" &&
@@ -164,9 +167,10 @@ export function isUserMessageIntakeNotification(notification: CodexServerNotific
     return false;
   }
   return (
-    item.type === "UserMessage" ||
-    item.type === "userMessage" ||
-    (item.type === "message" && item.role === "user")
+    matchesCurrentPromptText(item, options) &&
+    (item.type === "UserMessage" ||
+      item.type === "userMessage" ||
+      (item.type === "message" && item.role === "user"))
   );
 }
 
@@ -502,6 +506,28 @@ function extractRawResponseItemText(item: JsonObject): string {
       return text ? [text] : [];
     })
     .join("");
+}
+
+function matchesCurrentPromptText(
+  item: JsonObject,
+  options: { currentPromptText?: string; currentPromptTexts?: readonly string[] },
+): boolean {
+  const currentPromptTexts = [options.currentPromptText, ...(options.currentPromptTexts ?? [])]
+    .filter(isNonEmptyString)
+    .map((prompt) => prompt.trim());
+  if (currentPromptTexts.length === 0) {
+    return false;
+  }
+  const text = extractUserNotificationText(item).trim();
+  return text.length > 0 && currentPromptTexts.includes(text);
+}
+
+function extractUserNotificationText(item: JsonObject): string {
+  const text = readString(item, "text");
+  if (text) {
+    return text;
+  }
+  return extractRawResponseItemText(item);
 }
 
 function readNotificationItem(notification: CodexServerNotification): JsonObject | undefined {

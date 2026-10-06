@@ -116,7 +116,10 @@ export function applyCodexTurnNotificationState(params: {
   const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
   const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
   const isUserMessageIntake =
-    isCurrentTurnNotification && isUserMessageIntakeNotification(notification);
+    isCurrentTurnNotification &&
+    isUserMessageIntakeNotification(notification, {
+      currentPromptTexts: params.currentPromptTexts,
+    });
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
   if (isCurrentTurnNotification && !isNativeResponseStreamDelta && !isUserMessageIntake) {
