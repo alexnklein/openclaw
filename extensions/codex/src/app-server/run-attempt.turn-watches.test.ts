@@ -320,6 +320,22 @@ describe("applyCodexTurnNotificationState", () => {
     expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
     expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
   });
+
+  it("ignores completed app-server user intake", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-1",
+        type: "userMessage",
+        text: "run status",
+      }),
+      { completionIdleWatchArmed: true, assistantCompletionIdleWatchArmed: true },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
+  });
 });
 
 describe("runCodexAppServerAttempt turn watches", () => {
