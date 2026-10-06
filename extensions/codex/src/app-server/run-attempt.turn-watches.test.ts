@@ -186,14 +186,25 @@ function applyNotificationStateForTest(
   return { result, turnWatches };
 }
 
-async function runTurnWatchTimeoutScenario(notifications: CodexServerNotification[]) {
+async function runTurnWatchTimeoutScenario(
+  notifications: CodexServerNotification[],
+  options: {
+    timeoutMs?: number;
+    turnCompletionIdleTimeoutMs?: number;
+    turnAssistantCompletionIdleTimeoutMs?: number;
+    turnTerminalIdleTimeoutMs?: number;
+    postToolRawAssistantCompletionIdleTimeoutMs?: number;
+  } = {},
+) {
   const harness = createStartedThreadHarness();
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
-  params.timeoutMs = 100;
+  params.timeoutMs = options.timeoutMs ?? 100;
   const run = runCodexAppServerAttempt(params, {
-    turnCompletionIdleTimeoutMs: 500,
-    turnAssistantCompletionIdleTimeoutMs: 1_000,
-    turnTerminalIdleTimeoutMs: 500,
+    turnCompletionIdleTimeoutMs: options.turnCompletionIdleTimeoutMs ?? 500,
+    turnAssistantCompletionIdleTimeoutMs: options.turnAssistantCompletionIdleTimeoutMs ?? 1_000,
+    turnTerminalIdleTimeoutMs: options.turnTerminalIdleTimeoutMs ?? 500,
+    postToolRawAssistantCompletionIdleTimeoutMs:
+      options.postToolRawAssistantCompletionIdleTimeoutMs,
   });
   await harness.waitForMethod("turn/start");
   for (const notification of notifications) {
@@ -673,6 +684,51 @@ describe("runCodexAppServerAttempt turn watches", () => {
       }),
     );
     expect(await readCodexAppServerBinding(params.sessionFile)).toBeUndefined();
+  });
+
+  it("keeps the completed-assistant idle release guard active after progress", async () => {
+    const { result } = await runTurnWatchTimeoutScenario([completedAssistant("msg-1", "Done.")], {
+      timeoutMs: 200,
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+
+    expect(result).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done."],
+    });
+    expect(result.codexAppServerFailure).toBeUndefined();
+    expect(result.promptTimeoutOutcome).toBeUndefined();
+  });
+
+  it("keeps the post-tool completion idle guard active after tool progress", async () => {
+    const { result } = await runTurnWatchTimeoutScenario(
+      [
+        startedCommand("cmd-1", "touch done.txt"),
+        completedCommand("cmd-1", "touch done.txt"),
+      ],
+      {
+        timeoutMs: 200,
+        turnCompletionIdleTimeoutMs: 500,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        turnTerminalIdleTimeoutMs: 500,
+        postToolRawAssistantCompletionIdleTimeoutMs: 5,
+      },
+    );
+
+    expect(result).toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      codexAppServerFailure: {
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "completion",
+        replaySafe: false,
+      },
+    });
   });
 
   it("preserves a rewritten completed assistant after its id-less raw echo", async () => {
