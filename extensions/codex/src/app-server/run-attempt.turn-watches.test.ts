@@ -706,10 +706,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
   it("keeps the post-tool completion idle guard active after tool progress", async () => {
     const { result } = await runTurnWatchTimeoutScenario(
-      [
-        startedCommand("cmd-1", "touch done.txt"),
-        completedCommand("cmd-1", "touch done.txt"),
-      ],
+      [startedCommand("cmd-1", "touch done.txt"), completedCommand("cmd-1", "touch done.txt")],
       {
         timeoutMs: 200,
         turnCompletionIdleTimeoutMs: 500,
@@ -3463,6 +3460,90 @@ describe("runCodexAppServerAttempt turn watches", () => {
       );
     },
   );
+
+  it.each([
+    {
+      name: "assistant output stalls after user intake",
+      notifications: [
+        itemNotification("item/started", { id: "user-message-1", type: "userMessage" }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "userMessage",
+          text: "run status",
+        }),
+        {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "msg-1",
+            delta: "Still working",
+          },
+        },
+      ],
+      options: {
+        timeoutMs: 40,
+        turnCompletionIdleTimeoutMs: 500,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        turnTerminalIdleTimeoutMs: 500,
+      },
+      expectedFailure: {
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "progress",
+        replayBlockedReason: "assistant_output",
+      },
+      assistantTexts: ["Still working"],
+    },
+    {
+      name: "tool completion stalls after user intake",
+      notifications: [
+        itemNotification("item/started", { id: "user-message-1", type: "userMessage" }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "userMessage",
+          text: "run status",
+        }),
+        startedCommand("cmd-1", "touch done.txt"),
+        completedCommand("cmd-1", "touch done.txt"),
+      ],
+      options: {
+        timeoutMs: 200,
+        turnCompletionIdleTimeoutMs: 500,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        turnTerminalIdleTimeoutMs: 500,
+        postToolRawAssistantCompletionIdleTimeoutMs: 5,
+      },
+      expectedFailure: {
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "completion",
+        replayBlockedReason: "potential_side_effect",
+      },
+      assistantTexts: [],
+    },
+  ] satisfies Array<{
+    name: string;
+    notifications: CodexServerNotification[];
+    options: Parameters<typeof runTurnWatchTimeoutScenario>[1];
+    expectedFailure: {
+      kind: "turn_progress_idle_timeout" | "turn_completion_idle_timeout";
+      turnWatchTimeoutKind: "progress" | "completion";
+      replayBlockedReason: "assistant_output" | "potential_side_effect";
+    };
+    assistantTexts: string[];
+  }>)("$name", async ({ notifications, options, expectedFailure, assistantTexts }) => {
+    const { result } = await runTurnWatchTimeoutScenario(notifications, options);
+
+    expect(result).toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      assistantTexts,
+      codexAppServerFailure: {
+        ...expectedFailure,
+        replaySafe: false,
+      },
+    });
+  });
 
   it("keeps waiting after reasoning completes before a visible message call", async () => {
     const harness = createStartedThreadHarness();
