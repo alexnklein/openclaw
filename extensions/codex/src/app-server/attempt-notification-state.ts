@@ -274,7 +274,6 @@ export function applyCodexTurnNotificationState(params: {
     !postToolProgressNeedsTerminalGuard &&
     !postToolPatchUpdateNeedsTerminalGuard &&
     !rawResponseItemCompletedWithNoActiveItems &&
-    !isUserMessageIntake &&
     !shouldArmNoToolPostProgressReplyWatch &&
     !shouldArmNoToolPostRawProgressReplyWatch &&
     !shouldRearmCompletionIdleWatchAfterLastCurrentTurnItem

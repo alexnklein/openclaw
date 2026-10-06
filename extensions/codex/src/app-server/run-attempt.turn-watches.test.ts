@@ -307,7 +307,7 @@ describe("applyCodexTurnNotificationState", () => {
     expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
   });
 
-  it("does not disarm assistant completion recovery for user item starts", () => {
+  it("clears completion recovery without disarming assistant recovery for user item starts", () => {
     const { turnWatches } = applyNotificationStateForTest(
       itemNotification("item/started", {
         id: "user-message-1",
@@ -319,7 +319,7 @@ describe("applyCodexTurnNotificationState", () => {
 
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();
     expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
-    expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmCompletionIdleWatch).toHaveBeenCalledTimes(1);
   });
 
   it("treats steering user messages as active turn progress", () => {
@@ -337,7 +337,7 @@ describe("applyCodexTurnNotificationState", () => {
     });
   });
 
-  it("ignores completed app-server user intake", () => {
+  it("clears completion recovery for completed app-server user intake", () => {
     const { turnWatches } = applyNotificationStateForTest(
       itemNotification("item/completed", {
         id: "user-message-1",
@@ -349,7 +349,7 @@ describe("applyCodexTurnNotificationState", () => {
 
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();
     expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
-    expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmCompletionIdleWatch).toHaveBeenCalledTimes(1);
     expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
   });
 });
@@ -3465,25 +3465,26 @@ describe("runCodexAppServerAttempt turn watches", () => {
       expect(result.promptError).toBe(
         "codex app-server turn idle timed out waiting for turn/completed",
       );
-      expect(result.codexAppServerFailure).toMatchObject({
-        kind: "turn_completion_idle_timeout",
-        turnWatchTimeoutKind: "completion",
-        diagnostics: {
-          lastActivityReason: "turn:start",
-          completionIdleWatchArmed: true,
+      expect(result).toMatchObject({
+        aborted: true,
+        timedOut: true,
+        promptError: "codex app-server turn idle timed out waiting for turn/completed",
+        codexAppServerFailure: {
+          kind: "turn_completion_idle_timeout",
+          turnWatchTimeoutKind: "progress",
         },
       });
-      const completionWarnCall = warn.mock.calls.find(
-        ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+      const progressWarnCall = warn.mock.calls.find(
+        ([message]) => message === "codex app-server turn idle timed out waiting for progress",
       );
-      const completionWarnData = completionWarnCall?.[1] as
+      const progressWarnData = progressWarnCall?.[1] as
         | { lastActivityReason?: string; timeoutMs?: number }
         | undefined;
-      expect(completionWarnData?.timeoutMs).toBe(5);
-      expect(completionWarnData?.lastActivityReason).toBe("turn:start");
+      expect(progressWarnData?.timeoutMs).toBe(100);
+      expect(progressWarnData?.lastActivityReason).toBe("turn:start");
       expect(
         warn.mock.calls.some(
-          ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+          ([message]) => message === "codex app-server turn idle timed out waiting for completion",
         ),
       ).toBe(false);
       await vi.waitFor(
@@ -3502,6 +3503,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
   );
 
   it("keeps first-response progress deadline after completed user intake", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { result } = await runTurnWatchTimeoutScenario(
       [
         itemNotification("item/started", {
@@ -3517,16 +3519,36 @@ describe("runCodexAppServerAttempt turn watches", () => {
       ],
       {
         timeoutMs: 40,
-        turnCompletionIdleTimeoutMs: 500,
+        turnCompletionIdleTimeoutMs: 5,
         turnAssistantCompletionIdleTimeoutMs: 500,
         turnTerminalIdleTimeoutMs: 500,
       },
     );
 
-    expect(result.codexAppServerFailure).toMatchObject({
-      kind: "turn_completion_idle_timeout",
-      turnWatchTimeoutKind: "progress",
+    expect(result).toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      codexAppServerFailure: {
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "progress",
+        replaySafe: false,
+        replayBlockedReason: "active_item",
+      },
     });
+    const progressWarnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+    );
+    const progressWarnData = progressWarnCall?.[1] as
+      | { lastActivityReason?: string; timeoutMs?: number }
+      | undefined;
+    expect(progressWarnData?.timeoutMs).toBe(100);
+    expect(progressWarnData?.lastActivityReason).toBe("turn:start");
+    expect(
+      warn.mock.calls.some(
+        ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+      ),
+    ).toBe(false);
   });
 
   it.each([
