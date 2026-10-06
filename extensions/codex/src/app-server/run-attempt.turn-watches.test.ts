@@ -304,6 +304,7 @@ describe("applyCodexTurnNotificationState", () => {
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();
     expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
     expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
   });
 
   it("does not disarm assistant completion recovery for user item starts", () => {
@@ -3476,6 +3477,33 @@ describe("runCodexAppServerAttempt turn watches", () => {
       );
     },
   );
+
+  it("keeps first-response progress deadline after completed user intake", async () => {
+    const { result } = await runTurnWatchTimeoutScenario(
+      [
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "userMessage",
+        }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "userMessage",
+          text: "run status",
+        }),
+      ],
+      {
+        timeoutMs: 40,
+        turnCompletionIdleTimeoutMs: 500,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        turnTerminalIdleTimeoutMs: 500,
+      },
+    );
+
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "turn_completion_idle_timeout",
+      turnWatchTimeoutKind: "progress",
+    });
+  });
 
   it.each([
     {
