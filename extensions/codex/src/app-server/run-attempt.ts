@@ -93,6 +93,7 @@ import {
   isNativeResponseStreamDeltaNotification,
   isRawFunctionToolOutputCompletionNotification,
   isTerminalTurnStatus,
+  isUserMessageIntakeNotification,
   readCodexNotificationItem,
   readRawResponseToolCallId,
 } from "./attempt-notifications.js";
@@ -2239,7 +2240,7 @@ export async function runCodexAppServerAttempt(
         projector.recordNativeToolOutcome(nativeItem);
       }
     }
-    if (notificationMatchesActiveTurn) {
+    if (notificationMatchesActiveTurn && !isUserMessageIntakeNotification(notification)) {
       const finalizationHookNotification = readCodexFinalizationHookNotification(
         notification,
         thread.threadId,

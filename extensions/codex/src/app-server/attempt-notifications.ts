@@ -143,6 +143,33 @@ export function isAssistantCommentaryCompletionNotification(
   );
 }
 
+/** Returns true for prompt-intake user item lifecycle notifications. */
+export function isUserMessageIntakeNotification(notification: CodexServerNotification): boolean {
+  if (
+    notification.method !== "item/started" &&
+    notification.method !== "item/completed" &&
+    notification.method !== "rawResponseItem/completed"
+  ) {
+    return false;
+  }
+  const item = readNotificationItem(notification);
+  if (!item) {
+    return false;
+  }
+  if (
+    notification.method === "rawResponseItem/completed" &&
+    item.role === "user" &&
+    isCodexTurnAbortMarkerText(extractRawResponseItemText(item))
+  ) {
+    return false;
+  }
+  return (
+    item.type === "UserMessage" ||
+    item.type === "userMessage" ||
+    (item.type === "message" && item.role === "user")
+  );
+}
+
 /** Returns true for completed raw response reasoning items. */
 export function isRawReasoningCompletionNotification(
   notification: CodexServerNotification,
@@ -449,6 +476,14 @@ function readCodexTurnAbortMarkerBody(text: string): string | undefined {
     .trim();
 }
 
+function isCodexTurnAbortMarkerText(text: string): boolean {
+  const markerBody = readCodexTurnAbortMarkerBody(text.trim());
+  return (
+    markerBody === CODEX_INTERRUPTED_USER_GUIDANCE ||
+    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE
+  );
+}
+
 function extractRawResponseItemText(item: JsonObject): string {
   const content = item.content;
   if (!Array.isArray(content)) {
@@ -467,6 +502,13 @@ function extractRawResponseItemText(item: JsonObject): string {
       return text ? [text] : [];
     })
     .join("");
+}
+
+function readNotificationItem(notification: CodexServerNotification): JsonObject | undefined {
+  if (!isJsonObject(notification.params) || !isJsonObject(notification.params.item)) {
+    return undefined;
+  }
+  return notification.params.item;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

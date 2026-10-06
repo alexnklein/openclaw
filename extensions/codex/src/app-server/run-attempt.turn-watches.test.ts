@@ -12,7 +12,11 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
-import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
+import { applyCodexTurnNotificationState } from "./attempt-notification-state.js";
+import {
+  createCodexAttemptTurnWatchController,
+  type CodexAttemptTurnWatchController,
+} from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
@@ -133,6 +137,55 @@ function completedCommand(id: string, command: string): CodexServerNotification 
   });
 }
 
+function applyNotificationStateForTest(
+  notification: CodexServerNotification,
+  options: {
+    completionIdleWatchArmed?: boolean;
+    assistantCompletionIdleWatchArmed?: boolean;
+  } = {},
+) {
+  const turnWatches = {
+    isCompletionIdleWatchArmed: vi.fn(() => options.completionIdleWatchArmed === true),
+    isCompletionIdleWatchPinnedByTerminalError: vi.fn(() => false),
+    isAssistantCompletionIdleWatchArmed: vi.fn(
+      () => options.assistantCompletionIdleWatchArmed === true,
+    ),
+    armAttemptIdleWatch: vi.fn(),
+    armTerminalIdleWatch: vi.fn(),
+    armCompletionIdleWatch: vi.fn(),
+    disarmCompletionIdleWatch: vi.fn(),
+    armAssistantCompletionIdleWatch: vi.fn(),
+    disarmAssistantCompletionIdleWatch: vi.fn(),
+    touchActivity: vi.fn(),
+    noteNotificationReceived: vi.fn(),
+    extendAttemptIdleWatch: vi.fn(),
+    scheduleProgressWatches: vi.fn(),
+    clearCompletionIdleTimer: vi.fn(),
+    clearAssistantCompletionIdleTimer: vi.fn(),
+    clearTerminalIdleTimer: vi.fn(),
+    clearAttemptIdleTimer: vi.fn(),
+    clearAllTimers: vi.fn(),
+  } satisfies CodexAttemptTurnWatchController;
+
+  const result = applyCodexTurnNotificationState({
+    notification,
+    threadId: "thread-1",
+    turnId: "turn-1",
+    currentPromptTexts: ["run status"],
+    turnWatches,
+    activeTurnItemIds: new Set<string>(),
+    activeCompletionBlockerItemIds: new Set<string>(),
+    activeAppServerTurnRequests: 0,
+    pendingOpenClawDynamicToolCompletionIds: new Set<string>(),
+    turnCrossedToolHandoff: false,
+    postToolRawAssistantCompletionIdleTimeoutMs: 80,
+    onScheduleTerminalDynamicToolReleaseCheck: vi.fn(),
+    onReportExecutionNotification: vi.fn(),
+  });
+
+  return { result, turnWatches };
+}
+
 async function runTurnWatchTimeoutScenario(notifications: CodexServerNotification[]) {
   const harness = createStartedThreadHarness();
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
@@ -219,6 +272,42 @@ describe("createCodexAttemptTurnWatchController", () => {
     } finally {
       controller.clearAllTimers();
     }
+  });
+});
+
+describe("applyCodexTurnNotificationState", () => {
+  it("does not arm the completion watch for raw user intake echoes", () => {
+    const { turnWatches } = applyNotificationStateForTest({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run status" }],
+        },
+      },
+    });
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
+  });
+
+  it("does not disarm assistant completion recovery for user item starts", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-1",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { completionIdleWatchArmed: true, assistantCompletionIdleWatchArmed: true },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
   });
 });
 
@@ -1888,6 +1977,63 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
+  it("still times out when native tool completion stalls before terminal turn state", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-native-tool-stall.jsonl"),
+      path.join(tempDir, "workspace-native-tool-stall"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 100,
+      postToolRawAssistantCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "git status -sb",
+          status: "inProgress",
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "git status -sb",
+          status: "completed",
+        },
+      },
+    });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "turn_completion_idle_timeout",
+      turnWatchTimeoutKind: "completion",
+      diagnostics: {
+        lastActivityReason: "notification:item/completed",
+        completionIdleWatchArmed: true,
+      },
+    });
+  });
+
   it("preserves post-tool budget for native tool completion buffered during turn start", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
@@ -3155,6 +3301,112 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
     expect(queueActiveRunMessageForTest("session-1", "after silent turn")).toBe(false);
   });
+
+  it.each([
+    {
+      name: "legacy typed item",
+      notifications: [
+        itemNotification("item/started", { id: "user-message-1", type: "UserMessage" }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "UserMessage",
+          text: "run status",
+        }),
+      ],
+    },
+    {
+      name: "current typed item",
+      notifications: [
+        itemNotification("item/started", { id: "user-message-1", type: "userMessage" }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "userMessage",
+          text: "run status",
+        }),
+      ],
+    },
+    {
+      name: "raw response echo",
+      notifications: [
+        {
+          method: "rawResponseItem/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "run status" }],
+            },
+          },
+        },
+      ],
+    },
+  ] satisfies Array<{
+    name: string;
+    notifications: CodexServerNotification[];
+  }>)(
+    "does not treat $name user intake completion as first-response progress",
+    async ({ name, notifications }) => {
+      const harness = createStartedThreadHarness();
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const testSlug = name.replaceAll(" ", "-");
+      const params = createParams(
+        path.join(tempDir, `session-${testSlug}-intake.jsonl`),
+        path.join(tempDir, `workspace-${testSlug}-intake`),
+      );
+      params.timeoutMs = 100;
+
+      const run = runCodexAppServerAttempt(params, {
+        turnCompletionIdleTimeoutMs: 5,
+        turnTerminalIdleTimeoutMs: 500,
+      });
+      await harness.waitForMethod("turn/start");
+      for (const notification of notifications) {
+        await harness.notify(notification);
+      }
+
+      const result = await run;
+      expect(result.aborted).toBe(true);
+      expect(result.timedOut).toBe(true);
+      expect(result.promptError).toBe(
+        "codex app-server turn idle timed out waiting for turn/completed",
+      );
+      expect(result.codexAppServerFailure).toMatchObject({
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "completion",
+        diagnostics: {
+          lastActivityReason: "turn:start",
+          completionIdleWatchArmed: true,
+        },
+      });
+      const completionWarnCall = warn.mock.calls.find(
+        ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+      );
+      const completionWarnData = completionWarnCall?.[1] as
+        | { lastActivityReason?: string; timeoutMs?: number }
+        | undefined;
+      expect(completionWarnData?.timeoutMs).toBe(5);
+      expect(completionWarnData?.lastActivityReason).toBe("turn:start");
+      expect(
+        warn.mock.calls.some(
+          ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+        ),
+      ).toBe(false);
+      await vi.waitFor(
+        () =>
+          expect(harness.request).toHaveBeenCalledWith(
+            "turn/interrupt",
+            {
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+            { timeoutMs: 5_000 },
+          ),
+        { interval: 1 },
+      );
+    },
+  );
 
   it("keeps waiting after reasoning completes before a visible message call", async () => {
     const harness = createStartedThreadHarness();
