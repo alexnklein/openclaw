@@ -6259,6 +6259,43 @@ describe("dispatchReplyFromConfig", () => {
     expect(hookContext?.conversationId).toBe("telegram:999");
   });
 
+  it("binds normal message_received hooks to the dispatch run id", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "message_received") as () => boolean,
+    );
+    installThreadingTestPlugin({ id: "telegram" });
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      CommandBody: "hello",
+      MessageSidFull: "sid-full",
+      SessionKey: "agent:main:telegram:direct:999",
+    });
+
+    const replyResolver = async (_body: string, options?: GetReplyOptions) =>
+      ({ text: options?.runId ?? "missing-run" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { runId: "turn-run-1" },
+    });
+
+    const [event, hookContext] = firstMockCall(
+      hookMocks.runner.runMessageReceived,
+      "message received hook",
+    ) as [{ runId?: unknown }, { runId?: unknown }] | [];
+    expect(event?.runId).toBe("turn-run-1");
+    expect(hookContext?.runId).toBe("turn-run-1");
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("turn-run-1");
+  });
+
   it("does not emit shared message_received hooks when the channel emitted them itself", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(

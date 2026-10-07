@@ -1644,6 +1644,7 @@ export async function dispatchReplyFromConfig(
     const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
       messageId: messageIdForHook,
     });
+    nextHookContext.runId = turnRunId;
     return {
       hookContext: nextHookContext,
       inboundClaimContext: toPluginInboundClaimContext(nextHookContext),
