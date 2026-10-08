@@ -17,6 +17,7 @@ describe("Codex app-server steering queue", () => {
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
+      clientUserMessageIdPrefix: "openclaw:run-1:steer",
       answerPendingUserInput: () => false,
       signal: new AbortController().signal,
     });
@@ -28,6 +29,7 @@ describe("Codex app-server steering queue", () => {
     expect(request).toHaveBeenCalledWith("turn/steer", {
       threadId: "thread-1",
       expectedTurnId: "turn-1",
+      clientUserMessageId: "openclaw:run-1:steer:1",
       input: [{ type: "text", text: "accepted", text_elements: [] }],
     });
   });
@@ -40,6 +42,7 @@ describe("Codex app-server steering queue", () => {
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
+      clientUserMessageIdPrefix: "openclaw:run-1:steer",
       answerPendingUserInput: () => false,
       signal: new AbortController().signal,
     });
@@ -51,6 +54,7 @@ describe("Codex app-server steering queue", () => {
     expect(request).toHaveBeenCalledWith("turn/steer", {
       threadId: "thread-1",
       expectedTurnId: "turn-1",
+      clientUserMessageId: "openclaw:run-1:steer:1",
       input: [{ type: "text", text: "rejected", text_elements: [] }],
     });
   });
@@ -62,6 +66,7 @@ describe("Codex app-server steering queue", () => {
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
+      clientUserMessageIdPrefix: "openclaw:run-1:steer",
       answerPendingUserInput: () => false,
       signal: new AbortController().signal,
     });
@@ -76,6 +81,7 @@ describe("Codex app-server steering queue", () => {
     expect(request).toHaveBeenCalledWith("turn/steer", {
       threadId: "thread-1",
       expectedTurnId: "turn-1",
+      clientUserMessageId: "openclaw:run-1:steer:1",
       input: [
         { type: "text", text: "first", text_elements: [] },
         { type: "text", text: "second", text_elements: [] },
@@ -90,6 +96,7 @@ describe("Codex app-server steering queue", () => {
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
+      clientUserMessageIdPrefix: "openclaw:run-1:steer",
       answerPendingUserInput: () => false,
       signal: controller.signal,
     });
@@ -110,6 +117,7 @@ describe("Codex app-server steering queue", () => {
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
+      clientUserMessageIdPrefix: "openclaw:run-1:steer",
       answerPendingUserInput,
       signal: new AbortController().signal,
     });

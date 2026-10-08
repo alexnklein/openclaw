@@ -146,7 +146,11 @@ export function isAssistantCommentaryCompletionNotification(
 /** Returns true for prompt-intake user item lifecycle notifications. */
 export function isUserMessageIntakeNotification(
   notification: CodexServerNotification,
-  options: { currentPromptText?: string; currentPromptTexts?: readonly string[] } = {},
+  options: {
+    currentPromptText?: string;
+    currentPromptTexts?: readonly string[];
+    initialPromptClientId?: string;
+  } = {},
 ): boolean {
   if (
     notification.method !== "item/started" &&
@@ -166,12 +170,22 @@ export function isUserMessageIntakeNotification(
   ) {
     return false;
   }
-  return (
-    matchesCurrentPromptText(item, options) &&
-    (item.type === "UserMessage" ||
-      item.type === "userMessage" ||
-      (item.type === "message" && item.role === "user"))
-  );
+  if (
+    item.type !== "UserMessage" &&
+    item.type !== "userMessage" &&
+    (item.type !== "message" || item.role !== "user")
+  ) {
+    return false;
+  }
+  const clientId = readString(item, "clientId");
+  if (options.initialPromptClientId) {
+    if (clientId) {
+      return clientId === options.initialPromptClientId;
+    }
+    // Older app-server builds may omit clientId on prompt echoes. Keep a
+    // text-only fallback only for unidentified user echoes, never steering.
+  }
+  return matchesCurrentPromptText(item, options);
 }
 
 /** Returns true for completed raw response reasoning items. */

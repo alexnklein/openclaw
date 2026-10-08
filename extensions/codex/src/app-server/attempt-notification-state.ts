@@ -92,6 +92,7 @@ export function applyCodexTurnNotificationState(params: {
   threadId: string;
   turnId: string;
   currentPromptTexts: string[];
+  initialPromptClientId?: string;
   turnWatches: CodexAttemptTurnWatchController;
   activeTurnItemIds: Set<string>;
   activeCompletionBlockerItemIds: Set<string>;
@@ -119,6 +120,7 @@ export function applyCodexTurnNotificationState(params: {
     isCurrentTurnNotification &&
     isUserMessageIntakeNotification(notification, {
       currentPromptTexts: params.currentPromptTexts,
+      initialPromptClientId: params.initialPromptClientId,
     });
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 

@@ -21,6 +21,7 @@ export function createCodexSteeringQueue(params: {
   client: CodexAppServerClient;
   threadId: string;
   turnId: string;
+  clientUserMessageIdPrefix: string;
   answerPendingUserInput: (text: string) => boolean;
   signal: AbortSignal;
 }) {
@@ -32,6 +33,7 @@ export function createCodexSteeringQueue(params: {
   let batchedTexts: PendingSteerText[] = [];
   let batchTimer: NodeJS.Timeout | undefined;
   let sendChain: Promise<void> = Promise.resolve();
+  let steerSequence = 0;
 
   const clearBatchTimer = () => {
     if (batchTimer) {
@@ -50,6 +52,7 @@ export function createCodexSteeringQueue(params: {
     await params.client.request("turn/steer", {
       threadId: params.threadId,
       expectedTurnId: params.turnId,
+      clientUserMessageId: `${params.clientUserMessageIdPrefix}:${++steerSequence}`,
       input: texts.map(toCodexTextInput),
     });
   };

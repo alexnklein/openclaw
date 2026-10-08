@@ -172,6 +172,7 @@ function applyNotificationStateForTest(
     threadId: "thread-1",
     turnId: "turn-1",
     currentPromptTexts: ["run status"],
+    initialPromptClientId: "openclaw:run-1:prompt",
     turnWatches,
     activeTurnItemIds: new Set<string>(),
     activeCompletionBlockerItemIds: new Set<string>(),
@@ -337,6 +338,22 @@ describe("applyCodexTurnNotificationState", () => {
     });
   });
 
+  it("treats same-text steering user messages as active turn progress", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-1",
+        clientId: "openclaw:run-1:steer:1",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
+      details: { lastNotificationMethod: "item/started" },
+      attemptProgress: true,
+    });
+  });
+
   it("clears completion recovery for completed app-server user intake", () => {
     const { turnWatches } = applyNotificationStateForTest(
       itemNotification("item/completed", {
@@ -355,6 +372,69 @@ describe("applyCodexTurnNotificationState", () => {
 });
 
 describe("runCodexAppServerAttempt turn watches", () => {
+  it("keeps the first-response watch alive after same-text accepted steering", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "same-text-steer-session.jsonl"),
+      path.join(tempDir, "same-text-steer-workspace"),
+    );
+    params.prompt = "run status";
+    params.timeoutMs = 120;
+    let settled = false;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "user-message-initial",
+        clientId: `openclaw:${params.runId}:prompt`,
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        clientId: `openclaw:${params.runId}:prompt`,
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 70);
+    });
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        clientId: `openclaw:${params.runId}:steer:1`,
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        id: "user-message-steer",
+        clientId: `openclaw:${params.runId}:steer:1`,
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 70);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
   it.each([
     {
       name: "keeps the 30-minute floor for the implicit 48-hour run timeout",

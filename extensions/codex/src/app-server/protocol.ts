@@ -233,6 +233,7 @@ export type CodexTurnInterruptParams = JsonObject & {
 
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
+  clientUserMessageId?: string;
   input?: CodexUserInput[];
   cwd?: string;
   model?: string;
@@ -249,6 +250,13 @@ export type CodexTurnStartParams = JsonObject & {
       developer_instructions: string | null;
     };
   } | null;
+};
+
+export type CodexTurnSteerParams = JsonObject & {
+  threadId: string;
+  expectedTurnId: string;
+  clientUserMessageId?: string;
+  input: CodexUserInput[];
 };
 
 export type CodexSandboxPolicy = string | JsonObject;
@@ -626,6 +634,7 @@ type CodexAppServerRequestParamsOverride = {
   "thread/unarchive": CodexThreadArchiveParams;
   "thread/unsubscribe": CodexThreadUnsubscribeParams;
   "turn/interrupt": CodexTurnInterruptParams;
+  "turn/steer": CodexTurnSteerParams;
 };
 
 type CodexAppServerRequestResultMap = {

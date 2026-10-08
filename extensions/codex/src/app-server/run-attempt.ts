@@ -1225,6 +1225,8 @@ export async function runCodexAppServerAttempt(
     });
   };
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
+  const initialPromptClientId = `openclaw:${params.runId}:prompt`;
+  const steerClientIdPrefix = `openclaw:${params.runId}:steer`;
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -2001,6 +2003,7 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId,
       currentPromptTexts: [codexTurnPromptText],
+      initialPromptClientId,
       turnWatches,
       activeTurnItemIds,
       activeCompletionBlockerItemIds,
@@ -2242,7 +2245,10 @@ export async function runCodexAppServerAttempt(
     }
     if (
       notificationMatchesActiveTurn &&
-      !isUserMessageIntakeNotification(notification, { currentPromptTexts: [codexTurnPromptText] })
+      !isUserMessageIntakeNotification(notification, {
+        currentPromptTexts: [codexTurnPromptText],
+        initialPromptClientId,
+      })
     ) {
       const finalizationHookNotification = readCodexFinalizationHookNotification(
         notification,
@@ -2655,6 +2661,7 @@ export async function runCodexAppServerAttempt(
     pluginAppServer = turnAppServer;
     const turnStartParams = buildTurnStartParams(params, {
       threadId: thread.threadId,
+      clientUserMessageId: initialPromptClientId,
       cwd: codexExecutionCwd,
       appServer: turnAppServer,
       promptText: codexTurnPromptText,
@@ -3035,6 +3042,7 @@ export async function runCodexAppServerAttempt(
     client,
     threadId: thread.threadId,
     turnId: activeTurnId,
+    clientUserMessageIdPrefix: steerClientIdPrefix,
     answerPendingUserInput: (text) =>
       userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
     signal: runAbortController.signal,
