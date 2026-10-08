@@ -1,0 +1,50 @@
+{
+  "originalBaseline": "4e3429b77648f540b9e298e71c74e56d427b4539",
+  "finalHead": "HEAD",
+  "codeHeadBeforeEvidenceCommit": "4a57df15eacac10b7076657c4e98f6b6168f6701",
+  "reviewedRange": "4e3429b77648f540b9e298e71c74e56d427b4539..HEAD",
+  "pullRequest": "https://github.com/alexnklein/openclaw/pull/8",
+  "forkBranch": "alexnklein/openclaw:hc/codex-intake-timer-20261006",
+  "validation": [
+    {
+      "command": "git merge --ff-only 86b6c829fa005cfeec1da0815cc89db08d8d0c98",
+      "result": "already up to date"
+    },
+    {
+      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts extensions/codex/src/app-server/attempt-steering.test.ts extensions/codex/src/app-server/run-attempt.steering.test.ts",
+      "result": "passed; 3 files, 129 tests"
+    },
+    {
+      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts -- -t \"same-text|delayed no-client|user intake|progress deadline\"",
+      "result": "passed; 14 tests, 103 skipped"
+    },
+    {
+      "command": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-notification-state.ts extensions/codex/src/app-server/attempt-notifications.ts extensions/codex/src/app-server/attempt-steering.test.ts extensions/codex/src/app-server/attempt-steering.ts extensions/codex/src/app-server/protocol.ts extensions/codex/src/app-server/run-attempt.steering.test.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.turn-watches.test.ts extensions/codex/src/app-server/thread-lifecycle.ts",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check 4e3429b77648f540b9e298e71c74e56d427b4539..HEAD",
+      "result": "passed"
+    },
+    {
+      "command": ".agents/skills/autoreview/scripts/autoreview --mode branch --base 4e3429b77648f540b9e298e71c74e56d427b4539 --prompt-file /tmp/peer-timer-review-notes.md --stream-engine-output",
+      "result": "passed; no accepted/actionable findings"
+    }
+  ],
+  "dependencyProof": {
+    "codexSource": "../codex",
+    "clientUserMessageIdIntroducedBy": "e92c952b2e",
+    "firstStableTagContainingClientUserMessageId": "rust-v0.136.0",
+    "olderSupportedVersionsMayOmitClientId": "0.125.0-0.135.x"
+  },
+  "blockedValidation": [
+    {
+      "command": "node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --blacksmith-org openclaw --blacksmith-workflow .github/workflows/ci-check-testbox.yml --blacksmith-job check --blacksmith-ref main --idle-timeout 90m --ttl 240m --timing-json -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed -- <touched files>",
+      "result": "blocked; crabbox binary missing from PATH, wrapper failed sanity checks before running"
+    },
+    {
+      "command": "node --import tsx scripts/check-codex-app-server-protocol.ts",
+      "result": "blocked; sibling Codex cargo export exited before producing a protocol check result"
+    }
+  ]
+}

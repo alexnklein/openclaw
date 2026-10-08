@@ -461,6 +461,19 @@ describe("applyCodexTurnNotificationState", () => {
     });
   });
 
+  it("keeps delayed no-client initial intake suppressed after steering is accepted", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { sameTurnSteeringAccepted: true },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+  });
+
   it("treats raw same-text steering without client id as progress after steering is accepted", () => {
     const initial = applyNotificationStateForTest({
       method: "rawResponseItem/completed",
@@ -525,7 +538,7 @@ describe("applyCodexTurnNotificationState", () => {
           },
         },
       },
-      { sameTurnSteeringAccepted: true },
+      { initialPromptIntakeCompleted: true, sameTurnSteeringAccepted: true },
     );
 
     expect(turnWatches.touchActivity).toHaveBeenCalledWith(

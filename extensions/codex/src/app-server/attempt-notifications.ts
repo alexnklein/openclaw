@@ -189,15 +189,22 @@ export function isUserMessageIntakeNotification(
     if (itemId && options.initialPromptIntakeItemIds?.has(itemId)) {
       return true;
     }
+    if (!options.initialPromptIntakeCompleted) {
+      // Older app-server builds may omit clientId. Same-text steering is only
+      // distinguishable before intake completes after the initial item is known.
+      if (
+        options.sameTurnSteeringAccepted &&
+        itemId &&
+        (options.initialPromptIntakeItemIds?.size ?? 0) > 0
+      ) {
+        return false;
+      }
+      return matchesCurrentPromptText(item, options);
+    }
     if (options.sameTurnSteeringAccepted) {
       return false;
     }
-    if (options.initialPromptIntakeCompleted) {
-      return false;
-    }
-    // Older app-server builds may omit clientId on prompt echoes. Keep the
-    // fallback only until the initial prompt echo completes; same-text steering
-    // after that is active progress.
+    return false;
   }
   return matchesCurrentPromptText(item, options);
 }
