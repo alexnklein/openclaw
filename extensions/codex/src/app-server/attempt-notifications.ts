@@ -150,6 +150,9 @@ export function isUserMessageIntakeNotification(
     currentPromptText?: string;
     currentPromptTexts?: readonly string[];
     initialPromptClientId?: string;
+    initialPromptIntakeCompleted?: boolean;
+    initialPromptIntakeItemIds?: ReadonlySet<string>;
+    sameTurnSteeringAccepted?: boolean;
   } = {},
 ): boolean {
   if (
@@ -182,8 +185,19 @@ export function isUserMessageIntakeNotification(
     if (clientId) {
       return clientId === options.initialPromptClientId;
     }
-    // Older app-server builds may omit clientId on prompt echoes. Keep a
-    // text-only fallback only for unidentified user echoes, never steering.
+    const itemId = readNotificationItemId(notification);
+    if (itemId && options.initialPromptIntakeItemIds?.has(itemId)) {
+      return true;
+    }
+    if (options.sameTurnSteeringAccepted) {
+      return false;
+    }
+    if (options.initialPromptIntakeCompleted) {
+      return false;
+    }
+    // Older app-server builds may omit clientId on prompt echoes. Keep the
+    // fallback only until the initial prompt echo completes; same-text steering
+    // after that is active progress.
   }
   return matchesCurrentPromptText(item, options);
 }

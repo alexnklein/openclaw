@@ -23,6 +23,7 @@ export function createCodexSteeringQueue(params: {
   turnId: string;
   clientUserMessageIdPrefix: string;
   answerPendingUserInput: (text: string) => boolean;
+  onAcceptedSteer?: () => void;
   signal: AbortSignal;
 }) {
   type PendingSteerText = {
@@ -55,6 +56,7 @@ export function createCodexSteeringQueue(params: {
       clientUserMessageId: `${params.clientUserMessageIdPrefix}:${++steerSequence}`,
       input: texts.map(toCodexTextInput),
     });
+    params.onAcceptedSteer?.();
   };
 
   const enqueueSend = (texts: string[]) => {

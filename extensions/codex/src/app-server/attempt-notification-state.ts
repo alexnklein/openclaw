@@ -93,6 +93,9 @@ export function applyCodexTurnNotificationState(params: {
   turnId: string;
   currentPromptTexts: string[];
   initialPromptClientId?: string;
+  initialPromptIntakeCompleted: boolean;
+  initialPromptIntakeItemIds: Set<string>;
+  sameTurnSteeringAccepted: boolean;
   turnWatches: CodexAttemptTurnWatchController;
   activeTurnItemIds: Set<string>;
   activeCompletionBlockerItemIds: Set<string>;
@@ -106,6 +109,7 @@ export function applyCodexTurnNotificationState(params: {
   isCurrentTurnNotification: boolean;
   isTurnAbortMarker: boolean;
   isTurnTerminal: boolean;
+  initialPromptIntakeCompleted: boolean;
   turnCrossedToolHandoff: boolean;
 } {
   const { notification, turnWatches } = params;
@@ -121,8 +125,25 @@ export function applyCodexTurnNotificationState(params: {
     isUserMessageIntakeNotification(notification, {
       currentPromptTexts: params.currentPromptTexts,
       initialPromptClientId: params.initialPromptClientId,
+      initialPromptIntakeCompleted: params.initialPromptIntakeCompleted,
+      initialPromptIntakeItemIds: params.initialPromptIntakeItemIds,
+      sameTurnSteeringAccepted: params.sameTurnSteeringAccepted,
     });
+  let initialPromptIntakeCompleted = params.initialPromptIntakeCompleted;
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
+
+  if (isUserMessageIntake) {
+    const itemId = readNotificationItemId(notification);
+    if (itemId) {
+      params.initialPromptIntakeItemIds.add(itemId);
+    }
+    if (
+      notification.method === "item/completed" ||
+      notification.method === "rawResponseItem/completed"
+    ) {
+      initialPromptIntakeCompleted = true;
+    }
+  }
 
   if (isCurrentTurnNotification && !isNativeResponseStreamDelta && !isUserMessageIntake) {
     turnWatches.touchActivity(`notification:${notification.method}`, {
@@ -312,6 +333,7 @@ export function applyCodexTurnNotificationState(params: {
     isCurrentTurnNotification,
     isTurnAbortMarker,
     isTurnTerminal,
+    initialPromptIntakeCompleted,
     turnCrossedToolHandoff,
   };
 }

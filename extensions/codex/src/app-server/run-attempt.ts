@@ -1676,10 +1676,13 @@ export async function runCodexAppServerAttempt(
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
   const activeCompletionBlockerItemIds = new Set<string>();
+  const initialPromptIntakeItemIds = new Set<string>();
   const activeFinalizationHookRunIds = new Set<string>();
   const finalizationHookBatchStatuses = new Map<string, string | undefined>();
   let unsettledFinalizationHookCount = 0;
   let rejectedFinalizationHookAssistant: { itemId?: string } | undefined;
+  let initialPromptIntakeCompleted = false;
+  let sameTurnSteeringAccepted = false;
   let turnCrossedToolHandoff = false;
   let pendingTerminalDynamicToolRelease:
     | {
@@ -2004,6 +2007,9 @@ export async function runCodexAppServerAttempt(
       turnId,
       currentPromptTexts: [codexTurnPromptText],
       initialPromptClientId,
+      initialPromptIntakeCompleted,
+      initialPromptIntakeItemIds,
+      sameTurnSteeringAccepted,
       turnWatches,
       activeTurnItemIds,
       activeCompletionBlockerItemIds,
@@ -2014,6 +2020,7 @@ export async function runCodexAppServerAttempt(
       onScheduleTerminalDynamicToolReleaseCheck: scheduleTerminalDynamicToolReleaseCheck,
       onReportExecutionNotification: reportExecutionNotification,
     });
+    initialPromptIntakeCompleted = notificationState.initialPromptIntakeCompleted;
     turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
     const finalizationHookNotification = readCodexFinalizationHookNotification(
       notification,
@@ -2248,6 +2255,9 @@ export async function runCodexAppServerAttempt(
       !isUserMessageIntakeNotification(notification, {
         currentPromptTexts: [codexTurnPromptText],
         initialPromptClientId,
+        initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+        sameTurnSteeringAccepted,
       })
     ) {
       const finalizationHookNotification = readCodexFinalizationHookNotification(
@@ -3045,6 +3055,9 @@ export async function runCodexAppServerAttempt(
     clientUserMessageIdPrefix: steerClientIdPrefix,
     answerPendingUserInput: (text) =>
       userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
+    onAcceptedSteer: () => {
+      sameTurnSteeringAccepted = true;
+    },
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;

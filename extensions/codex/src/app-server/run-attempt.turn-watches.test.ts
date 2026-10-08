@@ -142,6 +142,9 @@ function applyNotificationStateForTest(
   options: {
     completionIdleWatchArmed?: boolean;
     assistantCompletionIdleWatchArmed?: boolean;
+    initialPromptIntakeCompleted?: boolean;
+    initialPromptIntakeItemIds?: Set<string>;
+    sameTurnSteeringAccepted?: boolean;
   } = {},
 ) {
   const turnWatches = {
@@ -173,6 +176,9 @@ function applyNotificationStateForTest(
     turnId: "turn-1",
     currentPromptTexts: ["run status"],
     initialPromptClientId: "openclaw:run-1:prompt",
+    initialPromptIntakeCompleted: options.initialPromptIntakeCompleted === true,
+    initialPromptIntakeItemIds: options.initialPromptIntakeItemIds ?? new Set<string>(),
+    sameTurnSteeringAccepted: options.sameTurnSteeringAccepted === true,
     turnWatches,
     activeTurnItemIds: new Set<string>(),
     activeCompletionBlockerItemIds: new Set<string>(),
@@ -352,6 +358,189 @@ describe("applyCodexTurnNotificationState", () => {
       details: { lastNotificationMethod: "item/started" },
       attemptProgress: true,
     });
+  });
+
+  it("treats same-text steering without client id as progress after initial intake completes", () => {
+    const initialPromptIntakeItemIds = new Set<string>();
+    const initial = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { initialPromptIntakeItemIds },
+    );
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+        sameTurnSteeringAccepted: true,
+      },
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledTimes(1);
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
+      details: { lastNotificationMethod: "item/started" },
+      attemptProgress: true,
+    });
+  });
+
+  it("treats same-text no-client messages as progress after initial intake completes", () => {
+    const initialPromptIntakeItemIds = new Set<string>();
+    const initial = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { initialPromptIntakeItemIds },
+    );
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-followup",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+      },
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
+      details: { lastNotificationMethod: "item/started" },
+      attemptProgress: true,
+    });
+  });
+
+  it("treats same-text steering without client id as progress while initial intake is open", () => {
+    const initialPromptIntakeItemIds = new Set<string>();
+    const initial = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { initialPromptIntakeItemIds },
+    );
+    const initialCompletion = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+        sameTurnSteeringAccepted: true,
+      },
+    );
+    const steering = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+        sameTurnSteeringAccepted: true,
+      },
+    );
+
+    expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(initialCompletion.turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(steering.turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
+      details: { lastNotificationMethod: "item/started" },
+      attemptProgress: true,
+    });
+  });
+
+  it("treats raw same-text steering without client id as progress after steering is accepted", () => {
+    const initial = applyNotificationStateForTest({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-user-message-initial",
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run status" }],
+        },
+      },
+    });
+    const { turnWatches } = applyNotificationStateForTest(
+      {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "raw-user-message-steer",
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "run status" }],
+          },
+        },
+      },
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        sameTurnSteeringAccepted: true,
+      },
+    );
+
+    expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
+      "notification:rawResponseItem/completed",
+      {
+        details: {
+          lastNotificationMethod: "rawResponseItem/completed",
+          lastNotificationItemId: "raw-user-message-steer",
+          lastNotificationItemType: "message",
+          lastNotificationItemRole: "user",
+          lastAssistantTextPreview: undefined,
+        },
+        attemptProgress: true,
+      },
+    );
+  });
+
+  it("treats raw same-text steering without item id as progress after steering is accepted", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "run status" }],
+          },
+        },
+      },
+      { sameTurnSteeringAccepted: true },
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
+      "notification:rawResponseItem/completed",
+      {
+        details: {
+          lastNotificationMethod: "rawResponseItem/completed",
+          lastNotificationItemId: undefined,
+          lastNotificationItemType: "message",
+          lastNotificationItemRole: "user",
+          lastAssistantTextPreview: undefined,
+        },
+        attemptProgress: true,
+      },
+    );
   });
 
   it("clears completion recovery for completed app-server user intake", () => {
