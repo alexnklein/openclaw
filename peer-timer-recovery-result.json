@@ -15,16 +15,24 @@
       "result": "passed; 3 files, 131 tests"
     },
     {
-      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts -- -t \"same-text|delayed no-client|whitespace-varied|user intake|progress deadline|old Codex\"",
-      "result": "passed; 16 tests, 103 skipped"
+      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts extensions/codex/src/app-server/attempt-steering.test.ts extensions/codex/src/app-server/run-attempt.steering.test.ts",
+      "result": "passed fresh at 6e08f534360e6704c6eb614e2cfb1b9cd1670378; 3 files, 131 tests"
     },
     {
-      "command": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-notifications.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
-      "result": "passed"
+      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts -- -t \"same-text|delayed no-client|whitespace-varied|user intake|progress deadline|old Codex\"",
+      "result": "passed fresh at 6e08f534360e6704c6eb614e2cfb1b9cd1670378; 16 tests, 103 skipped"
+    },
+    {
+      "command": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-notification-state.ts extensions/codex/src/app-server/attempt-notifications.ts extensions/codex/src/app-server/attempt-steering.ts extensions/codex/src/app-server/protocol.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/thread-lifecycle.ts extensions/codex/src/app-server/attempt-steering.test.ts extensions/codex/src/app-server/run-attempt.steering.test.ts extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
+      "result": "passed fresh at 6e08f534360e6704c6eb614e2cfb1b9cd1670378"
     },
     {
       "command": "git diff --check 4e3429b77648f540b9e298e71c74e56d427b4539..HEAD",
       "result": "passed"
+    },
+    {
+      "command": "git diff --check 4e3429b77648f540b9e298e71c74e56d427b4539..HEAD",
+      "result": "passed fresh at 6e08f534360e6704c6eb614e2cfb1b9cd1670378"
     },
     {
       "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
@@ -32,26 +40,27 @@
     },
     {
       "command": "gh pr view 8 --repo alexnklein/openclaw --json headRefOid,baseRefOid,state,url",
-      "result": "open; base 4e3429b77648f540b9e298e71c74e56d427b4539; head 735a99ba702862ef611251ab60c8b9627397dcc9 before this evidence refresh"
+      "result": "open; base 4e3429b77648f540b9e298e71c74e56d427b4539; head 6e08f534360e6704c6eb614e2cfb1b9cd1670378; mergeStateStatus CLEAN"
     }
   ],
   "dependencyProof": {
     "codexSource": "../codex",
-    "codexSourceHead": "822e58cc3d666166c7446c5b1ea2e52f5d09594c",
+    "codexCheckoutHead": "822e58cc3d666166c7446c5b1ea2e52f5d09594c",
+    "codexOriginMainHead": "b6e8a2e207e5591780061c62c50df417670f8d75",
     "clientUserMessageIdIntroducedBy": "e92c952b2e",
     "firstStableTagContainingClientUserMessageId": "rust-v0.136.0",
     "olderSupportedVersionsMayOmitClientId": "0.125.0-0.135.x",
     "currentContractProof": [
-      "../codex/codex-rs/app-server/src/request_processors/turn_processor.rs:612",
-      "../codex/codex-rs/app-server/src/request_processors/turn_processor.rs:1071",
-      "../codex/codex-rs/app-server-protocol/src/protocol/v2/item.rs:239",
-      "../codex/codex-rs/app-server-protocol/schema/typescript/v2/TurnSteerParams.ts:6"
+      "../codex/codex-rs/protocol/src/items.rs:80",
+      "../codex/codex-rs/app-server/tests/suite/v2/turn_start.rs:943",
+      "../codex/codex-rs/app-server/tests/suite/v2/turn_start.rs:970",
+      "../codex/codex-rs/protocol/src/protocol.rs:1860"
     ]
   },
   "blockedValidation": [
     {
       "command": "node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --blacksmith-org openclaw --blacksmith-workflow .github/workflows/ci-check-testbox.yml --blacksmith-job check --blacksmith-ref main --idle-timeout 90m --ttl 240m --timing-json -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed -- <touched files>",
-      "result": "blocked; crabbox binary missing from PATH, wrapper failed sanity checks before running"
+      "result": "blocked locally; after installing a temporary corepack pnpm shim, node scripts/check-changed.mjs delegated to pnpm crabbox:run, but scripts/crabbox-wrapper.mjs reported the crabbox binary failed --version/--help sanity checks."
     },
     {
       "command": "node --import tsx scripts/check-codex-app-server-protocol.ts",
