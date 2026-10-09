@@ -1,0 +1,39 @@
+{
+  "rap": "rap-1791471002005750657-recover-exhausted-so",
+  "iteration": 30,
+  "originalBase": "4e3429b77648f540b9e298e71c74e56d427b4539",
+  "implementationHead": "897e0128ab92501d7c16f3c167feb46e174fe1d2",
+  "reviewRange": "4e3429b77648f540b9e298e71c74e56d427b4539..897e0128ab92501d7c16f3c167feb46e174fe1d2",
+  "pr": {
+    "repository": "alexnklein/openclaw",
+    "number": 8,
+    "url": "https://github.com/alexnklein/openclaw/pull/8",
+    "branch": "hc/codex-intake-timer-20261006",
+    "head": "897e0128ab92501d7c16f3c167feb46e174fe1d2",
+    "base": "main",
+    "baseHead": "4e3429b77648f540b9e298e71c74e56d427b4539"
+  },
+  "upstreamCodexContract": {
+    "source": "../codex",
+    "sourceHead": "822e58cc3d666166c7446c5b1ea2e52f5d09594c",
+    "currentBundledCodex": "0.142.4",
+    "supportedMinimumCodex": "0.125.0",
+    "finding": "Codex rust-v0.125.0 and rust-v0.135.0 do not expose clientUserMessageId/clientId in the checked v2 turn/user-message protocol paths; rust-v0.136.0 does. The fix keeps the 0.125.0 floor and handles no-client same-text steering after accepted turn/steer."
+  },
+  "tests": [
+    {
+      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts -- --reporter=verbose",
+      "result": "passed: 1 file, 120 tests"
+    },
+    {
+      "command": "git diff --check 4e3429b77648f540b9e298e71c74e56d427b4539..897e0128ab92501d7c16f3c167feb46e174fe1d2",
+      "result": "passed"
+    }
+  ],
+  "notes": [
+    "Initial intake completion remains suppressed as first-response progress.",
+    "Same-text and whitespace-varied accepted steering refreshes progress even when older Codex omits clientId.",
+    "Assistant/reasoning/tool progress guards remain covered by the timeout regression suite.",
+    "Mesh absent is out of scope."
+  ]
+}
