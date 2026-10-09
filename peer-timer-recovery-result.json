@@ -1,7 +1,7 @@
 {
   "originalBaseline": "4e3429b77648f540b9e298e71c74e56d427b4539",
   "finalHead": "HEAD",
-  "codeHeadBeforeEvidenceCommit": "55b7ca36d6f46975fc4e5d4d481a6f9553c9cf95",
+  "codeHeadBeforeEvidenceCommit": "95e1522b0dfe3be93e4661af2077e07f2f9876cb",
   "reviewedRange": "4e3429b77648f540b9e298e71c74e56d427b4539..HEAD",
   "pullRequest": "https://github.com/alexnklein/openclaw/pull/8",
   "forkBranch": "alexnklein/openclaw:hc/codex-intake-timer-20261006",
@@ -12,14 +12,14 @@
     },
     {
       "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts extensions/codex/src/app-server/attempt-steering.test.ts extensions/codex/src/app-server/run-attempt.steering.test.ts",
-      "result": "passed; 3 files, 130 tests"
+      "result": "passed; 3 files, 131 tests"
     },
     {
-      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts -- -t \"same-text|delayed no-client|whitespace-varied|user intake|progress deadline\"",
-      "result": "passed; 15 tests, 103 skipped"
+      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts -- -t \"same-text|delayed no-client|whitespace-varied|user intake|progress deadline|old Codex\"",
+      "result": "passed; 16 tests, 103 skipped"
     },
     {
-      "command": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-notifications.ts extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
+      "command": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-notifications.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
       "result": "passed"
     },
     {
