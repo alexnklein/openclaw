@@ -1,7 +1,7 @@
 {
   "originalBaseline": "4e3429b77648f540b9e298e71c74e56d427b4539",
   "finalHead": "HEAD",
-  "codeHeadBeforeEvidenceCommit": "95e1522b0dfe3be93e4661af2077e07f2f9876cb",
+  "codeHeadBeforeEvidenceCommit": "735a99ba702862ef611251ab60c8b9627397dcc9",
   "reviewedRange": "4e3429b77648f540b9e298e71c74e56d427b4539..HEAD",
   "pullRequest": "https://github.com/alexnklein/openclaw/pull/8",
   "forkBranch": "alexnklein/openclaw:hc/codex-intake-timer-20261006",
@@ -25,13 +25,28 @@
     {
       "command": "git diff --check 4e3429b77648f540b9e298e71c74e56d427b4539..HEAD",
       "result": "passed"
+    },
+    {
+      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
+      "result": "passed; 1 file, 119 tests"
+    },
+    {
+      "command": "gh pr view 8 --repo alexnklein/openclaw --json headRefOid,baseRefOid,state,url",
+      "result": "open; base 4e3429b77648f540b9e298e71c74e56d427b4539; head 735a99ba702862ef611251ab60c8b9627397dcc9 before this evidence refresh"
     }
   ],
   "dependencyProof": {
     "codexSource": "../codex",
+    "codexSourceHead": "822e58cc3d666166c7446c5b1ea2e52f5d09594c",
     "clientUserMessageIdIntroducedBy": "e92c952b2e",
     "firstStableTagContainingClientUserMessageId": "rust-v0.136.0",
-    "olderSupportedVersionsMayOmitClientId": "0.125.0-0.135.x"
+    "olderSupportedVersionsMayOmitClientId": "0.125.0-0.135.x",
+    "currentContractProof": [
+      "../codex/codex-rs/app-server/src/request_processors/turn_processor.rs:612",
+      "../codex/codex-rs/app-server/src/request_processors/turn_processor.rs:1071",
+      "../codex/codex-rs/app-server-protocol/src/protocol/v2/item.rs:239",
+      "../codex/codex-rs/app-server-protocol/schema/typescript/v2/TurnSteerParams.ts:6"
+    ]
   },
   "blockedValidation": [
     {
