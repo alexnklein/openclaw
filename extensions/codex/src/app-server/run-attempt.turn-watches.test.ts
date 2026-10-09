@@ -390,7 +390,7 @@ describe("applyCodexTurnNotificationState", () => {
     });
   });
 
-  it("treats same-text no-client messages as progress after initial intake completes", () => {
+  it("keeps delayed same-text no-client intake suppressed after initial intake completes", () => {
     const initialPromptIntakeItemIds = new Set<string>();
     const initial = applyNotificationStateForTest(
       itemNotification("item/completed", {
@@ -412,10 +412,7 @@ describe("applyCodexTurnNotificationState", () => {
       },
     );
 
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
-      details: { lastNotificationMethod: "item/started" },
-      attemptProgress: true,
-    });
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
   it("treats same-text steering without client id as progress while initial intake is open", () => {
@@ -521,6 +518,46 @@ describe("applyCodexTurnNotificationState", () => {
         },
         attemptProgress: true,
       },
+    );
+  });
+
+  it("treats whitespace-varied same-text steering without client id as progress after steering is accepted", () => {
+    const initial = applyNotificationStateForTest({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-user-message-initial",
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run status" }],
+        },
+      },
+    });
+    const { turnWatches } = applyNotificationStateForTest(
+      {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "raw-user-message-steer",
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "  run status\n" }],
+          },
+        },
+      },
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        sameTurnSteeringAccepted: true,
+      },
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
+      "notification:rawResponseItem/completed",
+      expect.objectContaining({ attemptProgress: true }),
     );
   });
 
