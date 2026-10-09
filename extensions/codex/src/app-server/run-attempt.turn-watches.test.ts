@@ -360,7 +360,7 @@ describe("applyCodexTurnNotificationState", () => {
     });
   });
 
-  it("treats same-text steering without client id as progress after initial intake completes", () => {
+  it("keeps same-text no-client user echoes suppressed after initial intake completes", () => {
     const initialPromptIntakeItemIds = new Set<string>();
     const initial = applyNotificationStateForTest(
       itemNotification("item/completed", {
@@ -383,11 +383,7 @@ describe("applyCodexTurnNotificationState", () => {
       },
     );
 
-    expect(turnWatches.touchActivity).toHaveBeenCalledTimes(1);
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
-      details: { lastNotificationMethod: "item/started" },
-      attemptProgress: true,
-    });
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
   it("keeps delayed same-text no-client intake suppressed after initial intake completes", () => {
@@ -415,7 +411,7 @@ describe("applyCodexTurnNotificationState", () => {
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
-  it("treats same-text steering without client id as progress while initial intake is open", () => {
+  it("keeps same-text no-client user echoes suppressed while initial intake is open", () => {
     const initialPromptIntakeItemIds = new Set<string>();
     const initial = applyNotificationStateForTest(
       itemNotification("item/started", {
@@ -452,10 +448,7 @@ describe("applyCodexTurnNotificationState", () => {
 
     expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
     expect(initialCompletion.turnWatches.touchActivity).not.toHaveBeenCalled();
-    expect(steering.turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
-      details: { lastNotificationMethod: "item/started" },
-      attemptProgress: true,
-    });
+    expect(steering.turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
   it("keeps delayed no-client initial intake suppressed after steering is accepted", () => {
@@ -471,7 +464,7 @@ describe("applyCodexTurnNotificationState", () => {
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
-  it("treats raw same-text steering without client id as progress after steering is accepted", () => {
+  it("keeps raw same-text no-client user echoes suppressed after steering is accepted", () => {
     const initial = applyNotificationStateForTest({
       method: "rawResponseItem/completed",
       params: {
@@ -506,22 +499,10 @@ describe("applyCodexTurnNotificationState", () => {
     );
 
     expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
-      "notification:rawResponseItem/completed",
-      {
-        details: {
-          lastNotificationMethod: "rawResponseItem/completed",
-          lastNotificationItemId: "raw-user-message-steer",
-          lastNotificationItemType: "message",
-          lastNotificationItemRole: "user",
-          lastAssistantTextPreview: undefined,
-        },
-        attemptProgress: true,
-      },
-    );
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
-  it("treats whitespace-varied same-text steering without client id as progress after steering is accepted", () => {
+  it("keeps whitespace-varied same-text no-client user echoes suppressed after steering is accepted", () => {
     const initial = applyNotificationStateForTest({
       method: "rawResponseItem/completed",
       params: {
@@ -555,10 +536,7 @@ describe("applyCodexTurnNotificationState", () => {
       },
     );
 
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
-      "notification:rawResponseItem/completed",
-      expect.objectContaining({ attemptProgress: true }),
-    );
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
   it("keeps raw same-text no-client no-id intake suppressed after steering is accepted", () => {
@@ -650,6 +628,48 @@ describe("runCodexAppServerAttempt turn watches", () => {
         clientId: `openclaw:${params.runId}:steer:1`,
         type: "userMessage",
         content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 70);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
+  it("keeps the first-response watch alive when old Codex omits client id on same-text steering", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "same-text-no-client-steer-session.jsonl"),
+      path.join(tempDir, "same-text-no-client-steer-workspace"),
+    );
+    params.prompt = "run status";
+    params.timeoutMs = 120;
+    let settled = false;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 70);
+    });
+
+    expect(queueActiveRunMessageForTest(params.sessionId, " run status ", { debounceMs: 0 })).toBe(
+      true,
+    );
+    await harness.waitForMethod("turn/steer");
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: " run status " }],
       }),
     );
     await new Promise((resolve) => {

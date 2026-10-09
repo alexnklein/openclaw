@@ -191,21 +191,8 @@ export function isUserMessageIntakeNotification(
     }
     if (!options.initialPromptIntakeCompleted) {
       // Older app-server builds may omit clientId. Same-text steering is only
-      // distinguishable before intake completes after the initial item is known.
-      if (
-        options.sameTurnSteeringAccepted &&
-        itemId &&
-        (options.initialPromptIntakeItemIds?.size ?? 0) > 0
-      ) {
-        return false;
-      }
+      // credited from accepted turn/steer responses, not ambiguous user echoes.
       return matchesCurrentPromptText(item, options);
-    }
-    if (options.sameTurnSteeringAccepted) {
-      if (!itemId) {
-        return matchesCurrentPromptText(item, options);
-      }
-      return false;
     }
     return matchesCurrentPromptText(item, options);
   }
