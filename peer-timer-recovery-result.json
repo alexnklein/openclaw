@@ -1,8 +1,8 @@
 {
   "originalBaseline": "4e3429b77648f540b9e298e71c74e56d427b4539",
-  "finalHead": "232bc4d4f85eccb99f915a0ebb0cbe2d795e3ba5",
-  "codeHeadBeforeEvidenceCommit": "4a57df15eacac10b7076657c4e98f6b6168f6701",
-  "reviewedRange": "4e3429b77648f540b9e298e71c74e56d427b4539..232bc4d4f85eccb99f915a0ebb0cbe2d795e3ba5",
+  "finalHead": "a12e8a5ac29425ef92e52a3fa9942542c220ae6e",
+  "codeHeadBeforeEvidenceCommit": "a12e8a5ac29425ef92e52a3fa9942542c220ae6e",
+  "reviewedRange": "4e3429b77648f540b9e298e71c74e56d427b4539..a12e8a5ac29425ef92e52a3fa9942542c220ae6e",
   "pullRequest": "https://github.com/alexnklein/openclaw/pull/8",
   "forkBranch": "alexnklein/openclaw:hc/codex-intake-timer-20261006",
   "validation": [
@@ -12,23 +12,19 @@
     },
     {
       "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts extensions/codex/src/app-server/attempt-steering.test.ts extensions/codex/src/app-server/run-attempt.steering.test.ts",
-      "result": "passed; 3 files, 129 tests"
+      "result": "passed; 3 files, 130 tests"
     },
     {
-      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts -- -t \"same-text|delayed no-client|user intake|progress deadline\"",
-      "result": "passed; 14 tests, 103 skipped"
+      "command": "node scripts/run-vitest.mjs extensions/codex/src/app-server/run-attempt.turn-watches.test.ts -- -t \"same-text|delayed no-client|whitespace-varied|user intake|progress deadline\"",
+      "result": "passed; 15 tests, 103 skipped"
     },
     {
-      "command": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-notification-state.ts extensions/codex/src/app-server/attempt-notifications.ts extensions/codex/src/app-server/attempt-steering.test.ts extensions/codex/src/app-server/attempt-steering.ts extensions/codex/src/app-server/protocol.ts extensions/codex/src/app-server/run-attempt.steering.test.ts extensions/codex/src/app-server/run-attempt.ts extensions/codex/src/app-server/run-attempt.turn-watches.test.ts extensions/codex/src/app-server/thread-lifecycle.ts",
+      "command": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/codex/src/app-server/attempt-notifications.ts extensions/codex/src/app-server/run-attempt.turn-watches.test.ts",
       "result": "passed"
     },
     {
       "command": "git diff --check 4e3429b77648f540b9e298e71c74e56d427b4539..HEAD",
       "result": "passed"
-    },
-    {
-      "command": ".agents/skills/autoreview/scripts/autoreview --mode branch --base 4e3429b77648f540b9e298e71c74e56d427b4539 --prompt-file /tmp/peer-timer-review-notes.md --stream-engine-output",
-      "result": "passed; no accepted/actionable findings"
     }
   ],
   "dependencyProof": {
