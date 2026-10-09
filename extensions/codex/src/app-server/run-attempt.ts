@@ -3057,6 +3057,7 @@ export async function runCodexAppServerAttempt(
       userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
     onAcceptedSteer: () => {
       sameTurnSteeringAccepted = true;
+      turnWatches.disarmAssistantCompletionIdleWatch();
       turnWatches.touchActivity("request:turn/steer:accepted", { attemptProgress: true });
     },
     signal: runAbortController.signal,

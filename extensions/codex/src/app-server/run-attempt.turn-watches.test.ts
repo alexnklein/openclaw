@@ -682,6 +682,50 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
   });
 
+  it("clears stale assistant-completion release after no-client same-text steering", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "same-text-no-client-release-session.jsonl"),
+      path.join(tempDir, "same-text-no-client-release-workspace"),
+    );
+    params.prompt = "run status";
+    params.timeoutMs = 200;
+    let settled = false;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 40,
+      turnCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("assistant-before-steer", "older answer"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    expect(queueActiveRunMessageForTest(params.sessionId, " run status ", { debounceMs: 0 })).toBe(
+      true,
+    );
+    await harness.waitForMethod("turn/steer");
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: " run status " }],
+      }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
   it.each([
     {
       name: "keeps the 30-minute floor for the implicit 48-hour run timeout",
