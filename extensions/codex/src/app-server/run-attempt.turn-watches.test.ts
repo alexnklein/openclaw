@@ -12,7 +12,11 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { describe, expect, it, vi } from "vitest";
-import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
+import { applyCodexTurnNotificationState } from "./attempt-notification-state.js";
+import {
+  createCodexAttemptTurnWatchController,
+  type CodexAttemptTurnWatchController,
+} from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
@@ -133,14 +137,79 @@ function completedCommand(id: string, command: string): CodexServerNotification 
   });
 }
 
-async function runTurnWatchTimeoutScenario(notifications: CodexServerNotification[]) {
+function applyNotificationStateForTest(
+  notification: CodexServerNotification,
+  options: {
+    completionIdleWatchArmed?: boolean;
+    assistantCompletionIdleWatchArmed?: boolean;
+    initialPromptIntakeCompleted?: boolean;
+    initialPromptIntakeItemIds?: Set<string>;
+  } = {},
+) {
+  const turnWatches = {
+    isCompletionIdleWatchArmed: vi.fn(() => options.completionIdleWatchArmed === true),
+    isCompletionIdleWatchPinnedByTerminalError: vi.fn(() => false),
+    isAssistantCompletionIdleWatchArmed: vi.fn(
+      () => options.assistantCompletionIdleWatchArmed === true,
+    ),
+    armAttemptIdleWatch: vi.fn(),
+    armTerminalIdleWatch: vi.fn(),
+    armCompletionIdleWatch: vi.fn(),
+    disarmCompletionIdleWatch: vi.fn(),
+    armAssistantCompletionIdleWatch: vi.fn(),
+    disarmAssistantCompletionIdleWatch: vi.fn(),
+    touchActivity: vi.fn(),
+    noteNotificationReceived: vi.fn(),
+    extendAttemptIdleWatch: vi.fn(),
+    scheduleProgressWatches: vi.fn(),
+    clearCompletionIdleTimer: vi.fn(),
+    clearAssistantCompletionIdleTimer: vi.fn(),
+    clearTerminalIdleTimer: vi.fn(),
+    clearAttemptIdleTimer: vi.fn(),
+    clearAllTimers: vi.fn(),
+  } satisfies CodexAttemptTurnWatchController;
+
+  const result = applyCodexTurnNotificationState({
+    notification,
+    threadId: "thread-1",
+    turnId: "turn-1",
+    currentPromptTexts: ["run status"],
+    initialPromptClientId: "openclaw:run-1:prompt",
+    initialPromptIntakeCompleted: options.initialPromptIntakeCompleted === true,
+    initialPromptIntakeItemIds: options.initialPromptIntakeItemIds ?? new Set<string>(),
+    turnWatches,
+    activeTurnItemIds: new Set<string>(),
+    activeCompletionBlockerItemIds: new Set<string>(),
+    activeAppServerTurnRequests: 0,
+    pendingOpenClawDynamicToolCompletionIds: new Set<string>(),
+    turnCrossedToolHandoff: false,
+    postToolRawAssistantCompletionIdleTimeoutMs: 80,
+    onScheduleTerminalDynamicToolReleaseCheck: vi.fn(),
+    onReportExecutionNotification: vi.fn(),
+  });
+
+  return { result, turnWatches };
+}
+
+async function runTurnWatchTimeoutScenario(
+  notifications: CodexServerNotification[],
+  options: {
+    timeoutMs?: number;
+    turnCompletionIdleTimeoutMs?: number;
+    turnAssistantCompletionIdleTimeoutMs?: number;
+    turnTerminalIdleTimeoutMs?: number;
+    postToolRawAssistantCompletionIdleTimeoutMs?: number;
+  } = {},
+) {
   const harness = createStartedThreadHarness();
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
-  params.timeoutMs = 100;
+  params.timeoutMs = options.timeoutMs ?? 100;
   const run = runCodexAppServerAttempt(params, {
-    turnCompletionIdleTimeoutMs: 500,
-    turnAssistantCompletionIdleTimeoutMs: 1_000,
-    turnTerminalIdleTimeoutMs: 500,
+    turnCompletionIdleTimeoutMs: options.turnCompletionIdleTimeoutMs ?? 500,
+    turnAssistantCompletionIdleTimeoutMs: options.turnAssistantCompletionIdleTimeoutMs ?? 1_000,
+    turnTerminalIdleTimeoutMs: options.turnTerminalIdleTimeoutMs ?? 500,
+    postToolRawAssistantCompletionIdleTimeoutMs:
+      options.postToolRawAssistantCompletionIdleTimeoutMs,
   });
   await harness.waitForMethod("turn/start");
   for (const notification of notifications) {
@@ -222,7 +291,467 @@ describe("createCodexAttemptTurnWatchController", () => {
   });
 });
 
+describe("applyCodexTurnNotificationState", () => {
+  it("does not arm the completion watch for raw user intake echoes", () => {
+    const { turnWatches } = applyNotificationStateForTest({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run status" }],
+        },
+      },
+    });
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
+  });
+
+  it("clears completion recovery without disarming assistant recovery for user item starts", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-1",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { completionIdleWatchArmed: true, assistantCompletionIdleWatchArmed: true },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmCompletionIdleWatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats steering user messages as active turn progress", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-1",
+        type: "userMessage",
+        content: [{ type: "text", text: "late steer" }],
+      }),
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
+      details: { lastNotificationMethod: "item/started" },
+      attemptProgress: true,
+    });
+  });
+
+  it("treats same-text steering user messages as active turn progress", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-1",
+        clientId: "openclaw:run-1:steer:1",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
+      details: { lastNotificationMethod: "item/started" },
+      attemptProgress: true,
+    });
+  });
+
+  it("keeps same-text no-client accepted steering suppressed as ambiguous intake", () => {
+    const initialPromptIntakeItemIds = new Set<string>();
+    const initial = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { initialPromptIntakeItemIds },
+    );
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+      },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+  });
+
+  it("keeps completed no-client same-text steering suppressed as ambiguous intake", () => {
+    const initialPromptIntakeItemIds = new Set<string>();
+    const initial = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { initialPromptIntakeItemIds },
+    );
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+      },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps delayed same-text no-client intake suppressed after initial intake completes", () => {
+    const initialPromptIntakeItemIds = new Set<string>();
+    const initial = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { initialPromptIntakeItemIds },
+    );
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-followup",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+      },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-text no-client intake suppressed while the initial item is open", () => {
+    const initialPromptIntakeItemIds = new Set<string>();
+    const initial = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { initialPromptIntakeItemIds },
+    );
+    const initialCompletion = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+      },
+    );
+    const duplicateInitial = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+      },
+    );
+
+    expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(initialCompletion.turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(duplicateInitial.turnWatches.touchActivity).not.toHaveBeenCalled();
+  });
+
+  it("keeps delayed no-client initial intake suppressed after steering is accepted", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/started", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {},
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+  });
+
+  it("keeps raw same-text no-client echoes suppressed after accepted steering", () => {
+    const initial = applyNotificationStateForTest({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-user-message-initial",
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run status" }],
+        },
+      },
+    });
+    const { turnWatches } = applyNotificationStateForTest(
+      {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "raw-user-message-steer",
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "run status" }],
+          },
+        },
+      },
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+      },
+    );
+
+    expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+  });
+
+  it("keeps whitespace-varied raw no-client echoes suppressed after accepted steering", () => {
+    const initial = applyNotificationStateForTest({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-user-message-initial",
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run status" }],
+        },
+      },
+    });
+    const { turnWatches } = applyNotificationStateForTest(
+      {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "raw-user-message-steer",
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "  run status\n" }],
+          },
+        },
+      },
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+      },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+  });
+
+  it("keeps raw same-text no-client no-id intake suppressed after steering is accepted", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "run status" }],
+          },
+        },
+      },
+      { initialPromptIntakeCompleted: true },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+  });
+
+  it("clears completion recovery for completed app-server user intake", () => {
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-1",
+        type: "userMessage",
+        text: "run status",
+      }),
+      { completionIdleWatchArmed: true, assistantCompletionIdleWatchArmed: true },
+    );
+
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
+    expect(turnWatches.disarmCompletionIdleWatch).toHaveBeenCalledTimes(1);
+    expect(turnWatches.disarmAssistantCompletionIdleWatch).not.toHaveBeenCalled();
+  });
+});
+
 describe("runCodexAppServerAttempt turn watches", () => {
+  it("keeps the first-response watch alive after same-text accepted steering", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "same-text-steer-session.jsonl"),
+      path.join(tempDir, "same-text-steer-workspace"),
+    );
+    params.prompt = "run status";
+    params.timeoutMs = 120;
+    let settled = false;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "user-message-initial",
+        clientId: `openclaw:${params.runId}:prompt`,
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        clientId: `openclaw:${params.runId}:prompt`,
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 70);
+    });
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        clientId: `openclaw:${params.runId}:steer:1`,
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        id: "user-message-steer",
+        clientId: `openclaw:${params.runId}:steer:1`,
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 70);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
+  it("keeps the first-response watch alive when old Codex omits client id on same-text steering", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "same-text-no-client-steer-session.jsonl"),
+      path.join(tempDir, "same-text-no-client-steer-workspace"),
+    );
+    params.prompt = "run status";
+    params.timeoutMs = 120;
+    let settled = false;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 70);
+    });
+
+    expect(queueActiveRunMessageForTest(params.sessionId, " run status ", { debounceMs: 0 })).toBe(
+      true,
+    );
+    await harness.waitForMethod("turn/steer");
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: " run status " }],
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: " run status " }],
+      }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 70);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
+  it("clears stale assistant-completion release after no-client same-text steering", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "same-text-no-client-release-session.jsonl"),
+      path.join(tempDir, "same-text-no-client-release-workspace"),
+    );
+    params.prompt = "run status";
+    params.timeoutMs = 200;
+    let settled = false;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 40,
+      turnCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("assistant-before-steer", "older answer"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    expect(queueActiveRunMessageForTest(params.sessionId, " run status ", { debounceMs: 0 })).toBe(
+      true,
+    );
+    await harness.waitForMethod("turn/steer");
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: " run status " }],
+      }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
   it.each([
     {
       name: "keeps the 30-minute floor for the implicit 48-hour run timeout",
@@ -584,6 +1113,48 @@ describe("runCodexAppServerAttempt turn watches", () => {
       }),
     );
     expect(await readCodexAppServerBinding(params.sessionFile)).toBeUndefined();
+  });
+
+  it("keeps the completed-assistant idle release guard active after progress", async () => {
+    const { result } = await runTurnWatchTimeoutScenario([completedAssistant("msg-1", "Done.")], {
+      timeoutMs: 200,
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+
+    expect(result).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done."],
+    });
+    expect(result.codexAppServerFailure).toBeUndefined();
+    expect(result.promptTimeoutOutcome).toBeUndefined();
+  });
+
+  it("keeps the post-tool completion idle guard active after tool progress", async () => {
+    const { result } = await runTurnWatchTimeoutScenario(
+      [startedCommand("cmd-1", "touch done.txt"), completedCommand("cmd-1", "touch done.txt")],
+      {
+        timeoutMs: 200,
+        turnCompletionIdleTimeoutMs: 500,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        turnTerminalIdleTimeoutMs: 500,
+        postToolRawAssistantCompletionIdleTimeoutMs: 5,
+      },
+    );
+
+    expect(result).toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      codexAppServerFailure: {
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "completion",
+        replaySafe: false,
+      },
+    });
   });
 
   it("preserves a rewritten completed assistant after its id-less raw echo", async () => {
@@ -1888,6 +2459,63 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
+  it("still times out when native tool completion stalls before terminal turn state", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-native-tool-stall.jsonl"),
+      path.join(tempDir, "workspace-native-tool-stall"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 100,
+      postToolRawAssistantCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "git status -sb",
+          status: "inProgress",
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-1",
+          type: "commandExecution",
+          command: "git status -sb",
+          status: "completed",
+        },
+      },
+    });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "turn_completion_idle_timeout",
+      turnWatchTimeoutKind: "completion",
+      diagnostics: {
+        lastActivityReason: "notification:item/completed",
+        completionIdleWatchArmed: true,
+      },
+    });
+  });
+
   it("preserves post-tool budget for native tool completion buffered during turn start", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
@@ -3154,6 +3782,262 @@ describe("runCodexAppServerAttempt turn watches", () => {
       { interval: 1 },
     );
     expect(queueActiveRunMessageForTest("session-1", "after silent turn")).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "legacy typed item",
+      notifications: [
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "UserMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "UserMessage",
+          text: "hello",
+        }),
+      ],
+    },
+    {
+      name: "current typed item",
+      notifications: [
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "userMessage",
+          text: "hello",
+        }),
+      ],
+    },
+    {
+      name: "raw response echo",
+      notifications: [
+        {
+          method: "rawResponseItem/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "hello" }],
+            },
+          },
+        },
+      ],
+    },
+  ] satisfies Array<{
+    name: string;
+    notifications: CodexServerNotification[];
+  }>)(
+    "does not treat $name user intake completion as first-response progress",
+    async ({ name, notifications }) => {
+      const harness = createStartedThreadHarness();
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const testSlug = name.replaceAll(" ", "-");
+      const params = createParams(
+        path.join(tempDir, `session-${testSlug}-intake.jsonl`),
+        path.join(tempDir, `workspace-${testSlug}-intake`),
+      );
+      params.timeoutMs = 100;
+
+      const run = runCodexAppServerAttempt(params, {
+        turnCompletionIdleTimeoutMs: 5,
+        turnTerminalIdleTimeoutMs: 500,
+      });
+      await harness.waitForMethod("turn/start");
+      for (const notification of notifications) {
+        await harness.notify(notification);
+      }
+
+      const result = await run;
+      expect(result.aborted).toBe(true);
+      expect(result.timedOut).toBe(true);
+      expect(result.promptError).toBe(
+        "codex app-server turn idle timed out waiting for turn/completed",
+      );
+      expect(result).toMatchObject({
+        aborted: true,
+        timedOut: true,
+        promptError: "codex app-server turn idle timed out waiting for turn/completed",
+        codexAppServerFailure: {
+          kind: "turn_completion_idle_timeout",
+          turnWatchTimeoutKind: "progress",
+        },
+      });
+      const progressWarnCall = warn.mock.calls.find(
+        ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+      );
+      const progressWarnData = progressWarnCall?.[1] as
+        | { lastActivityReason?: string; timeoutMs?: number }
+        | undefined;
+      expect(progressWarnData?.timeoutMs).toBe(100);
+      expect(progressWarnData?.lastActivityReason).toBe("turn:start");
+      expect(
+        warn.mock.calls.some(
+          ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+        ),
+      ).toBe(false);
+      await vi.waitFor(
+        () =>
+          expect(harness.request).toHaveBeenCalledWith(
+            "turn/interrupt",
+            {
+              threadId: "thread-1",
+              turnId: "turn-1",
+            },
+            { timeoutMs: 5_000 },
+          ),
+        { interval: 1 },
+      );
+    },
+  );
+
+  it("keeps first-response progress deadline after completed user intake", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const { result } = await runTurnWatchTimeoutScenario(
+      [
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "userMessage",
+          text: "hello",
+        }),
+      ],
+      {
+        timeoutMs: 40,
+        turnCompletionIdleTimeoutMs: 5,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        turnTerminalIdleTimeoutMs: 500,
+      },
+    );
+
+    expect(result).toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      codexAppServerFailure: {
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "progress",
+        replaySafe: false,
+        replayBlockedReason: "active_item",
+      },
+    });
+    const progressWarnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+    );
+    const progressWarnData = progressWarnCall?.[1] as
+      | { lastActivityReason?: string; timeoutMs?: number }
+      | undefined;
+    expect(progressWarnData?.timeoutMs).toBe(100);
+    expect(progressWarnData?.lastActivityReason).toBe("turn:start");
+    expect(
+      warn.mock.calls.some(
+        ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "assistant output stalls after user intake",
+      notifications: [
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "userMessage",
+          text: "hello",
+        }),
+        {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "msg-1",
+            delta: "Still working",
+          },
+        },
+      ],
+      options: {
+        timeoutMs: 40,
+        turnCompletionIdleTimeoutMs: 500,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        turnTerminalIdleTimeoutMs: 500,
+      },
+      expectedFailure: {
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "progress",
+        replayBlockedReason: "assistant_output",
+      },
+      assistantTexts: ["Still working"],
+    },
+    {
+      name: "tool completion stalls after user intake",
+      notifications: [
+        itemNotification("item/started", {
+          id: "user-message-1",
+          type: "userMessage",
+          content: [{ type: "text", text: "hello" }],
+        }),
+        itemNotification("item/completed", {
+          id: "user-message-1",
+          type: "userMessage",
+          text: "hello",
+        }),
+        startedCommand("cmd-1", "touch done.txt"),
+        completedCommand("cmd-1", "touch done.txt"),
+      ],
+      options: {
+        timeoutMs: 200,
+        turnCompletionIdleTimeoutMs: 500,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        turnTerminalIdleTimeoutMs: 500,
+        postToolRawAssistantCompletionIdleTimeoutMs: 5,
+      },
+      expectedFailure: {
+        kind: "turn_completion_idle_timeout",
+        turnWatchTimeoutKind: "completion",
+        replayBlockedReason: "potential_side_effect",
+      },
+      assistantTexts: [],
+    },
+  ] satisfies Array<{
+    name: string;
+    notifications: CodexServerNotification[];
+    options: Parameters<typeof runTurnWatchTimeoutScenario>[1];
+    expectedFailure: {
+      kind: "turn_progress_idle_timeout" | "turn_completion_idle_timeout";
+      turnWatchTimeoutKind: "progress" | "completion";
+      replayBlockedReason: "assistant_output" | "potential_side_effect";
+    };
+    assistantTexts: string[];
+  }>)("$name", async ({ notifications, options, expectedFailure, assistantTexts }) => {
+    const { result } = await runTurnWatchTimeoutScenario(notifications, options);
+
+    expect(result).toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      assistantTexts,
+      codexAppServerFailure: {
+        ...expectedFailure,
+        replaySafe: false,
+      },
+    });
   });
 
   it("keeps waiting after reasoning completes before a visible message call", async () => {

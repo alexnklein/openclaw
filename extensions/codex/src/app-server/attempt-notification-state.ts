@@ -18,6 +18,8 @@ import {
   isReasoningItemCompletionNotification,
   isRetryableErrorNotification,
   isTurnNotification,
+  isUserMessageIntakeNotification,
+  isUserMessageNotification,
   readCodexNotificationItem,
   readNotificationItemId,
   shouldDisarmAssistantCompletionIdleWatch,
@@ -91,6 +93,9 @@ export function applyCodexTurnNotificationState(params: {
   threadId: string;
   turnId: string;
   currentPromptTexts: string[];
+  initialPromptClientId?: string;
+  initialPromptIntakeCompleted: boolean;
+  initialPromptIntakeItemIds: Set<string>;
   turnWatches: CodexAttemptTurnWatchController;
   activeTurnItemIds: Set<string>;
   activeCompletionBlockerItemIds: Set<string>;
@@ -104,6 +109,7 @@ export function applyCodexTurnNotificationState(params: {
   isCurrentTurnNotification: boolean;
   isTurnAbortMarker: boolean;
   isTurnTerminal: boolean;
+  initialPromptIntakeCompleted: boolean;
   turnCrossedToolHandoff: boolean;
 } {
   const { notification, turnWatches } = params;
@@ -114,14 +120,41 @@ export function applyCodexTurnNotificationState(params: {
   );
   const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
   const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
+  const isUserMessageIntake =
+    isCurrentTurnNotification &&
+    isUserMessageIntakeNotification(notification, {
+      currentPromptTexts: params.currentPromptTexts,
+      initialPromptClientId: params.initialPromptClientId,
+      initialPromptIntakeCompleted: params.initialPromptIntakeCompleted,
+      initialPromptIntakeItemIds: params.initialPromptIntakeItemIds,
+    });
+  const isUserMessage =
+    isCurrentTurnNotification && !isUserMessageIntake && isUserMessageNotification(notification);
+  let initialPromptIntakeCompleted = params.initialPromptIntakeCompleted;
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
-  if (isCurrentTurnNotification && !isNativeResponseStreamDelta) {
+  if (isUserMessageIntake) {
+    const itemId = readNotificationItemId(notification);
+    if (itemId) {
+      params.initialPromptIntakeItemIds.add(itemId);
+    }
+    if (
+      notification.method === "item/completed" ||
+      notification.method === "rawResponseItem/completed"
+    ) {
+      initialPromptIntakeCompleted = true;
+    }
+  }
+
+  if (isCurrentTurnNotification && !isNativeResponseStreamDelta && !isUserMessageIntake) {
     turnWatches.touchActivity(`notification:${notification.method}`, {
       details: describeNotificationActivity(notification),
       attemptProgress: true,
     });
     params.onReportExecutionNotification(notification);
+  }
+
+  if (isCurrentTurnNotification && !isNativeResponseStreamDelta) {
     updateActiveTurnItemIds(notification, params.activeTurnItemIds);
     updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
     if (notification.method === "item/completed" && params.activeTurnItemIds.size === 0) {
@@ -165,6 +198,8 @@ export function applyCodexTurnNotificationState(params: {
     notification.method === "rawResponseItem/completed" &&
     params.activeTurnItemIds.size === 0 &&
     params.activeAppServerTurnRequests === 0 &&
+    !isUserMessage &&
+    !isUserMessageIntake &&
     !assistantCompletionCanRelease &&
     !postToolProgressNeedsTerminalGuard &&
     !rawToolOutputCompletion;
@@ -184,6 +219,8 @@ export function applyCodexTurnNotificationState(params: {
     notification.method === "item/completed" &&
     params.activeTurnItemIds.size === 0 &&
     !trackedDynamicToolCompletion &&
+    !isUserMessage &&
+    !isUserMessageIntake &&
     !assistantCompletionCanRelease &&
     !shouldArmNoToolPostProgressReplyWatch;
   const shouldUsePostToolContinuationWatch =
@@ -244,7 +281,11 @@ export function applyCodexTurnNotificationState(params: {
     // Raw OpenAI response streams can report the tool-output handoff without
     // a matching app-server `item/completed`; keep the post-tool guard alive.
     armPostToolContinuationWatch();
-  } else if (isCurrentTurnNotification && shouldDisarmAssistantCompletionIdleWatch(notification)) {
+  } else if (
+    isCurrentTurnNotification &&
+    !isUserMessageIntake &&
+    shouldDisarmAssistantCompletionIdleWatch(notification)
+  ) {
     turnWatches.disarmAssistantCompletionIdleWatch();
   }
 
@@ -295,6 +336,7 @@ export function applyCodexTurnNotificationState(params: {
     isCurrentTurnNotification,
     isTurnAbortMarker,
     isTurnTerminal,
+    initialPromptIntakeCompleted,
     turnCrossedToolHandoff,
   };
 }

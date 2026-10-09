@@ -108,6 +108,7 @@ describe("runCodexAppServerAttempt steering", () => {
     expect(steer?.params).toEqual({
       threadId: "thread-1",
       expectedTurnId: "turn-1",
+      clientUserMessageId: `openclaw:${params.runId}:steer:1`,
       input: [{ type: "text", text: "more context", text_elements: [] }],
     });
   });
@@ -134,6 +135,7 @@ describe("runCodexAppServerAttempt steering", () => {
             params: {
               threadId: "thread-1",
               expectedTurnId: "turn-1",
+              clientUserMessageId: `openclaw:${params.runId}:steer:1`,
               input: [{ type: "text", text: "subagent complete", text_elements: [] }],
             },
           },
@@ -173,6 +175,7 @@ describe("runCodexAppServerAttempt steering", () => {
             params: {
               threadId: "thread-1",
               expectedTurnId: "turn-1",
+              clientUserMessageId: `openclaw:${params.runId}:steer:1`,
               input: [{ type: "text", text: "session-file registered", text_elements: [] }],
             },
           },
@@ -212,6 +215,7 @@ describe("runCodexAppServerAttempt steering", () => {
         params: {
           threadId: "thread-1",
           expectedTurnId: "turn-1",
+          clientUserMessageId: `openclaw:${params.runId}:steer:1`,
           input: [
             { type: "text", text: "first", text_elements: [] },
             { type: "text", text: "second", text_elements: [] },
@@ -239,6 +243,7 @@ describe("runCodexAppServerAttempt steering", () => {
         params: {
           threadId: "thread-1",
           expectedTurnId: "turn-1",
+          clientUserMessageId: `openclaw:${params.runId}:steer:1`,
           input: [{ type: "text", text: "late steer", text_elements: [] }],
         },
       },
@@ -272,6 +277,7 @@ describe("runCodexAppServerAttempt steering", () => {
         params: {
           threadId: "thread-1",
           expectedTurnId: "turn-1",
+          clientUserMessageId: `openclaw:${params.runId}:steer:1`,
           input: [
             { type: "text", text: "first", text_elements: [] },
             { type: "text", text: "second", text_elements: [] },

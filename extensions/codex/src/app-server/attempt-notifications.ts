@@ -102,6 +102,33 @@ function isCompletionBlockingItem(item: CodexThreadItem): boolean {
   }
 }
 
+/** Returns true for app-server user message lifecycle notifications. */
+export function isUserMessageNotification(notification: CodexServerNotification): boolean {
+  if (
+    notification.method !== "item/started" &&
+    notification.method !== "item/completed" &&
+    notification.method !== "rawResponseItem/completed"
+  ) {
+    return false;
+  }
+  const item = readNotificationItem(notification);
+  if (!item) {
+    return false;
+  }
+  if (
+    notification.method === "rawResponseItem/completed" &&
+    item.role === "user" &&
+    isCodexTurnAbortMarkerText(extractRawResponseItemText(item))
+  ) {
+    return false;
+  }
+  return (
+    item.type === "UserMessage" ||
+    item.type === "userMessage" ||
+    (item.type === "message" && item.role === "user")
+  );
+}
+
 function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params)) {
     return false;
@@ -141,6 +168,40 @@ export function isAssistantCommentaryCompletionNotification(
     readString(item, "type") === "agentMessage" &&
     readString(item, "phase") === "commentary",
   );
+}
+
+/** Returns true for prompt-intake user item lifecycle notifications. */
+export function isUserMessageIntakeNotification(
+  notification: CodexServerNotification,
+  options: {
+    currentPromptText?: string;
+    currentPromptTexts?: readonly string[];
+    initialPromptClientId?: string;
+    initialPromptIntakeCompleted?: boolean;
+    initialPromptIntakeItemIds?: ReadonlySet<string>;
+  } = {},
+): boolean {
+  const item = readNotificationItem(notification);
+  if (!item || !isUserMessageNotification(notification)) {
+    return false;
+  }
+  const clientId = readString(item, "clientId");
+  if (options.initialPromptClientId) {
+    if (clientId) {
+      return clientId === options.initialPromptClientId;
+    }
+    const itemId = readNotificationItemId(notification);
+    if (itemId && options.initialPromptIntakeItemIds?.has(itemId)) {
+      return true;
+    }
+    if (!options.initialPromptIntakeCompleted) {
+      // Older app-server builds may omit clientId. Same-text steering is only
+      // credited from accepted turn/steer responses, not ambiguous user echoes.
+      return matchesCurrentPromptText(item, options);
+    }
+    return matchesCurrentPromptText(item, options);
+  }
+  return matchesCurrentPromptText(item, options);
 }
 
 /** Returns true for completed raw response reasoning items. */
@@ -449,6 +510,14 @@ function readCodexTurnAbortMarkerBody(text: string): string | undefined {
     .trim();
 }
 
+function isCodexTurnAbortMarkerText(text: string): boolean {
+  const markerBody = readCodexTurnAbortMarkerBody(text.trim());
+  return (
+    markerBody === CODEX_INTERRUPTED_USER_GUIDANCE ||
+    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE
+  );
+}
+
 function extractRawResponseItemText(item: JsonObject): string {
   const content = item.content;
   if (!Array.isArray(content)) {
@@ -467,6 +536,35 @@ function extractRawResponseItemText(item: JsonObject): string {
       return text ? [text] : [];
     })
     .join("");
+}
+
+function matchesCurrentPromptText(
+  item: JsonObject,
+  options: { currentPromptText?: string; currentPromptTexts?: readonly string[] },
+): boolean {
+  const currentPromptTexts = [options.currentPromptText, ...(options.currentPromptTexts ?? [])]
+    .filter(isNonEmptyString)
+    .map((prompt) => prompt.trim());
+  if (currentPromptTexts.length === 0) {
+    return false;
+  }
+  const text = extractUserNotificationText(item).trim();
+  return text.length > 0 && currentPromptTexts.includes(text);
+}
+
+function extractUserNotificationText(item: JsonObject): string {
+  const text = readString(item, "text");
+  if (text) {
+    return text;
+  }
+  return extractRawResponseItemText(item);
+}
+
+function readNotificationItem(notification: CodexServerNotification): JsonObject | undefined {
+  if (!isJsonObject(notification.params) || !isJsonObject(notification.params.item)) {
+    return undefined;
+  }
+  return notification.params.item;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

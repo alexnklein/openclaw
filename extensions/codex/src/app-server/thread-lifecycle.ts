@@ -1409,6 +1409,7 @@ export function buildTurnStartParams(
   params: EmbeddedRunAttemptParams,
   options: {
     threadId: string;
+    clientUserMessageId?: string;
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
@@ -1433,6 +1434,7 @@ export function buildTurnStartParams(
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   return {
     threadId: options.threadId,
+    ...(options.clientUserMessageId ? { clientUserMessageId: options.clientUserMessageId } : {}),
     input: buildUserInput(params, options.promptText),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,

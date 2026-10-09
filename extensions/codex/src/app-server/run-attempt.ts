@@ -93,6 +93,7 @@ import {
   isNativeResponseStreamDeltaNotification,
   isRawFunctionToolOutputCompletionNotification,
   isTerminalTurnStatus,
+  isUserMessageIntakeNotification,
   readCodexNotificationItem,
   readRawResponseToolCallId,
 } from "./attempt-notifications.js";
@@ -1224,6 +1225,8 @@ export async function runCodexAppServerAttempt(
     });
   };
   let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
+  const initialPromptClientId = `openclaw:${params.runId}:prompt`;
+  const steerClientIdPrefix = `openclaw:${params.runId}:steer`;
   const buildCodexTurnCollaborationDeveloperInstructions = () =>
     buildTurnCollaborationMode(params, {
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -1673,10 +1676,12 @@ export async function runCodexAppServerAttempt(
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
   const activeCompletionBlockerItemIds = new Set<string>();
+  const initialPromptIntakeItemIds = new Set<string>();
   const activeFinalizationHookRunIds = new Set<string>();
   const finalizationHookBatchStatuses = new Map<string, string | undefined>();
   let unsettledFinalizationHookCount = 0;
   let rejectedFinalizationHookAssistant: { itemId?: string } | undefined;
+  let initialPromptIntakeCompleted = false;
   let turnCrossedToolHandoff = false;
   let pendingTerminalDynamicToolRelease:
     | {
@@ -2000,6 +2005,9 @@ export async function runCodexAppServerAttempt(
       threadId: thread.threadId,
       turnId,
       currentPromptTexts: [codexTurnPromptText],
+      initialPromptClientId,
+      initialPromptIntakeCompleted,
+      initialPromptIntakeItemIds,
       turnWatches,
       activeTurnItemIds,
       activeCompletionBlockerItemIds,
@@ -2010,6 +2018,7 @@ export async function runCodexAppServerAttempt(
       onScheduleTerminalDynamicToolReleaseCheck: scheduleTerminalDynamicToolReleaseCheck,
       onReportExecutionNotification: reportExecutionNotification,
     });
+    initialPromptIntakeCompleted = notificationState.initialPromptIntakeCompleted;
     turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
     const finalizationHookNotification = readCodexFinalizationHookNotification(
       notification,
@@ -2239,7 +2248,15 @@ export async function runCodexAppServerAttempt(
         projector.recordNativeToolOutcome(nativeItem);
       }
     }
-    if (notificationMatchesActiveTurn) {
+    if (
+      notificationMatchesActiveTurn &&
+      !isUserMessageIntakeNotification(notification, {
+        currentPromptTexts: [codexTurnPromptText],
+        initialPromptClientId,
+        initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+      })
+    ) {
       const finalizationHookNotification = readCodexFinalizationHookNotification(
         notification,
         thread.threadId,
@@ -2651,6 +2668,7 @@ export async function runCodexAppServerAttempt(
     pluginAppServer = turnAppServer;
     const turnStartParams = buildTurnStartParams(params, {
       threadId: thread.threadId,
+      clientUserMessageId: initialPromptClientId,
       cwd: codexExecutionCwd,
       appServer: turnAppServer,
       promptText: codexTurnPromptText,
@@ -3031,8 +3049,13 @@ export async function runCodexAppServerAttempt(
     client,
     threadId: thread.threadId,
     turnId: activeTurnId,
+    clientUserMessageIdPrefix: steerClientIdPrefix,
     answerPendingUserInput: (text) =>
       userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
+    onAcceptedSteer: () => {
+      turnWatches.disarmAssistantCompletionIdleWatch();
+      turnWatches.touchActivity("request:turn/steer:accepted", { attemptProgress: true });
+    },
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;
