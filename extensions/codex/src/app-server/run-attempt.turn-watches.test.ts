@@ -561,7 +561,7 @@ describe("applyCodexTurnNotificationState", () => {
     );
   });
 
-  it("treats raw same-text steering without item id as progress after steering is accepted", () => {
+  it("keeps raw same-text no-client no-id intake suppressed after steering is accepted", () => {
     const { turnWatches } = applyNotificationStateForTest(
       {
         method: "rawResponseItem/completed",
@@ -578,19 +578,7 @@ describe("applyCodexTurnNotificationState", () => {
       { initialPromptIntakeCompleted: true, sameTurnSteeringAccepted: true },
     );
 
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
-      "notification:rawResponseItem/completed",
-      {
-        details: {
-          lastNotificationMethod: "rawResponseItem/completed",
-          lastNotificationItemId: undefined,
-          lastNotificationItemType: "message",
-          lastNotificationItemRole: "user",
-          lastAssistantTextPreview: undefined,
-        },
-        attemptProgress: true,
-      },
-    );
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
   it("clears completion recovery for completed app-server user intake", () => {

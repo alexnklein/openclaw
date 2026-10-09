@@ -202,6 +202,9 @@ export function isUserMessageIntakeNotification(
       return matchesCurrentPromptText(item, options);
     }
     if (options.sameTurnSteeringAccepted) {
+      if (!itemId) {
+        return matchesCurrentPromptText(item, options);
+      }
       return false;
     }
     return matchesCurrentPromptText(item, options);
