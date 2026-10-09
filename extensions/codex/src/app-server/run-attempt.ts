@@ -1682,7 +1682,6 @@ export async function runCodexAppServerAttempt(
   let unsettledFinalizationHookCount = 0;
   let rejectedFinalizationHookAssistant: { itemId?: string } | undefined;
   let initialPromptIntakeCompleted = false;
-  let sameTurnSteeringAccepted = false;
   let turnCrossedToolHandoff = false;
   let pendingTerminalDynamicToolRelease:
     | {
@@ -2009,7 +2008,6 @@ export async function runCodexAppServerAttempt(
       initialPromptClientId,
       initialPromptIntakeCompleted,
       initialPromptIntakeItemIds,
-      sameTurnSteeringAccepted,
       turnWatches,
       activeTurnItemIds,
       activeCompletionBlockerItemIds,
@@ -2257,7 +2255,6 @@ export async function runCodexAppServerAttempt(
         initialPromptClientId,
         initialPromptIntakeCompleted,
         initialPromptIntakeItemIds,
-        sameTurnSteeringAccepted,
       })
     ) {
       const finalizationHookNotification = readCodexFinalizationHookNotification(
@@ -3056,7 +3053,6 @@ export async function runCodexAppServerAttempt(
     answerPendingUserInput: (text) =>
       userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
     onAcceptedSteer: () => {
-      sameTurnSteeringAccepted = true;
       turnWatches.disarmAssistantCompletionIdleWatch();
       turnWatches.touchActivity("request:turn/steer:accepted", { attemptProgress: true });
     },

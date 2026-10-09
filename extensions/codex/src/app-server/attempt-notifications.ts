@@ -179,7 +179,6 @@ export function isUserMessageIntakeNotification(
     initialPromptClientId?: string;
     initialPromptIntakeCompleted?: boolean;
     initialPromptIntakeItemIds?: ReadonlySet<string>;
-    sameTurnSteeringAccepted?: boolean;
   } = {},
 ): boolean {
   const item = readNotificationItem(notification);
@@ -199,9 +198,6 @@ export function isUserMessageIntakeNotification(
       // Older app-server builds may omit clientId. Same-text steering is only
       // credited from accepted turn/steer responses, not ambiguous user echoes.
       return matchesCurrentPromptText(item, options);
-    }
-    if (itemId && options.sameTurnSteeringAccepted) {
-      return false;
     }
     return matchesCurrentPromptText(item, options);
   }

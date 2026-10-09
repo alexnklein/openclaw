@@ -144,7 +144,6 @@ function applyNotificationStateForTest(
     assistantCompletionIdleWatchArmed?: boolean;
     initialPromptIntakeCompleted?: boolean;
     initialPromptIntakeItemIds?: Set<string>;
-    sameTurnSteeringAccepted?: boolean;
   } = {},
 ) {
   const turnWatches = {
@@ -178,7 +177,6 @@ function applyNotificationStateForTest(
     initialPromptClientId: "openclaw:run-1:prompt",
     initialPromptIntakeCompleted: options.initialPromptIntakeCompleted === true,
     initialPromptIntakeItemIds: options.initialPromptIntakeItemIds ?? new Set<string>(),
-    sameTurnSteeringAccepted: options.sameTurnSteeringAccepted === true,
     turnWatches,
     activeTurnItemIds: new Set<string>(),
     activeCompletionBlockerItemIds: new Set<string>(),
@@ -360,7 +358,7 @@ describe("applyCodexTurnNotificationState", () => {
     });
   });
 
-  it("treats same-text no-client accepted steering as active turn progress", () => {
+  it("keeps same-text no-client accepted steering suppressed as ambiguous intake", () => {
     const initialPromptIntakeItemIds = new Set<string>();
     const initial = applyNotificationStateForTest(
       itemNotification("item/completed", {
@@ -379,17 +377,13 @@ describe("applyCodexTurnNotificationState", () => {
       {
         initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
         initialPromptIntakeItemIds,
-        sameTurnSteeringAccepted: true,
       },
     );
 
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
-      details: { lastNotificationMethod: "item/started" },
-      attemptProgress: true,
-    });
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
-  it("does not arm completion watch for completed no-client accepted steering", () => {
+  it("keeps completed no-client same-text steering suppressed as ambiguous intake", () => {
     const initialPromptIntakeItemIds = new Set<string>();
     const initial = applyNotificationStateForTest(
       itemNotification("item/completed", {
@@ -408,14 +402,10 @@ describe("applyCodexTurnNotificationState", () => {
       {
         initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
         initialPromptIntakeItemIds,
-        sameTurnSteeringAccepted: true,
       },
     );
 
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/completed", {
-      details: { lastNotificationMethod: "item/completed" },
-      attemptProgress: true,
-    });
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
     expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
   });
 
@@ -463,7 +453,6 @@ describe("applyCodexTurnNotificationState", () => {
       {
         initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
         initialPromptIntakeItemIds,
-        sameTurnSteeringAccepted: true,
       },
     );
     const duplicateInitial = applyNotificationStateForTest(
@@ -475,7 +464,6 @@ describe("applyCodexTurnNotificationState", () => {
       {
         initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
         initialPromptIntakeItemIds,
-        sameTurnSteeringAccepted: true,
       },
     );
 
@@ -491,13 +479,13 @@ describe("applyCodexTurnNotificationState", () => {
         type: "userMessage",
         content: [{ type: "text", text: "run status" }],
       }),
-      { sameTurnSteeringAccepted: true },
+      {},
     );
 
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
-  it("treats raw same-text no-client accepted steering as active turn progress", () => {
+  it("keeps raw same-text no-client echoes suppressed after accepted steering", () => {
     const initial = applyNotificationStateForTest({
       method: "rawResponseItem/completed",
       params: {
@@ -527,27 +515,14 @@ describe("applyCodexTurnNotificationState", () => {
       },
       {
         initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
-        sameTurnSteeringAccepted: true,
       },
     );
 
     expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
-      "notification:rawResponseItem/completed",
-      {
-        details: {
-          lastNotificationMethod: "rawResponseItem/completed",
-          lastNotificationItemId: "raw-user-message-steer",
-          lastNotificationItemType: "message",
-          lastNotificationItemRole: "user",
-          lastAssistantTextPreview: undefined,
-        },
-        attemptProgress: true,
-      },
-    );
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
-  it("treats whitespace-varied same-text no-client accepted steering as active turn progress", () => {
+  it("keeps whitespace-varied raw no-client echoes suppressed after accepted steering", () => {
     const initial = applyNotificationStateForTest({
       method: "rawResponseItem/completed",
       params: {
@@ -577,23 +552,10 @@ describe("applyCodexTurnNotificationState", () => {
       },
       {
         initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
-        sameTurnSteeringAccepted: true,
       },
     );
 
-    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
-      "notification:rawResponseItem/completed",
-      {
-        details: {
-          lastNotificationMethod: "rawResponseItem/completed",
-          lastNotificationItemId: "raw-user-message-steer",
-          lastNotificationItemType: "message",
-          lastNotificationItemRole: "user",
-          lastAssistantTextPreview: undefined,
-        },
-        attemptProgress: true,
-      },
-    );
+    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
   it("keeps raw same-text no-client no-id intake suppressed after steering is accepted", () => {
@@ -610,7 +572,7 @@ describe("applyCodexTurnNotificationState", () => {
           },
         },
       },
-      { initialPromptIntakeCompleted: true, sameTurnSteeringAccepted: true },
+      { initialPromptIntakeCompleted: true },
     );
 
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();

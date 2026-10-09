@@ -96,7 +96,6 @@ export function applyCodexTurnNotificationState(params: {
   initialPromptClientId?: string;
   initialPromptIntakeCompleted: boolean;
   initialPromptIntakeItemIds: Set<string>;
-  sameTurnSteeringAccepted: boolean;
   turnWatches: CodexAttemptTurnWatchController;
   activeTurnItemIds: Set<string>;
   activeCompletionBlockerItemIds: Set<string>;
@@ -128,7 +127,6 @@ export function applyCodexTurnNotificationState(params: {
       initialPromptClientId: params.initialPromptClientId,
       initialPromptIntakeCompleted: params.initialPromptIntakeCompleted,
       initialPromptIntakeItemIds: params.initialPromptIntakeItemIds,
-      sameTurnSteeringAccepted: params.sameTurnSteeringAccepted,
     });
   const isUserMessage =
     isCurrentTurnNotification && !isUserMessageIntake && isUserMessageNotification(notification);
