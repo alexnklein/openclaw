@@ -19,6 +19,7 @@ import {
   isRetryableErrorNotification,
   isTurnNotification,
   isUserMessageIntakeNotification,
+  isUserMessageNotification,
   readCodexNotificationItem,
   readNotificationItemId,
   shouldDisarmAssistantCompletionIdleWatch,
@@ -129,6 +130,8 @@ export function applyCodexTurnNotificationState(params: {
       initialPromptIntakeItemIds: params.initialPromptIntakeItemIds,
       sameTurnSteeringAccepted: params.sameTurnSteeringAccepted,
     });
+  const isUserMessage =
+    isCurrentTurnNotification && !isUserMessageIntake && isUserMessageNotification(notification);
   let initialPromptIntakeCompleted = params.initialPromptIntakeCompleted;
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
@@ -197,6 +200,7 @@ export function applyCodexTurnNotificationState(params: {
     notification.method === "rawResponseItem/completed" &&
     params.activeTurnItemIds.size === 0 &&
     params.activeAppServerTurnRequests === 0 &&
+    !isUserMessage &&
     !isUserMessageIntake &&
     !assistantCompletionCanRelease &&
     !postToolProgressNeedsTerminalGuard &&
@@ -217,6 +221,7 @@ export function applyCodexTurnNotificationState(params: {
     notification.method === "item/completed" &&
     params.activeTurnItemIds.size === 0 &&
     !trackedDynamicToolCompletion &&
+    !isUserMessage &&
     !isUserMessageIntake &&
     !assistantCompletionCanRelease &&
     !shouldArmNoToolPostProgressReplyWatch;

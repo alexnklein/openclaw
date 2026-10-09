@@ -389,6 +389,36 @@ describe("applyCodexTurnNotificationState", () => {
     });
   });
 
+  it("does not arm completion watch for completed no-client accepted steering", () => {
+    const initialPromptIntakeItemIds = new Set<string>();
+    const initial = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-initial",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      { initialPromptIntakeItemIds },
+    );
+    const { turnWatches } = applyNotificationStateForTest(
+      itemNotification("item/completed", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: "run status" }],
+      }),
+      {
+        initialPromptIntakeCompleted: initial.result.initialPromptIntakeCompleted,
+        initialPromptIntakeItemIds,
+        sameTurnSteeringAccepted: true,
+      },
+    );
+
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/completed", {
+      details: { lastNotificationMethod: "item/completed" },
+      attemptProgress: true,
+    });
+    expect(turnWatches.armCompletionIdleWatch).not.toHaveBeenCalled();
+  });
+
   it("keeps delayed same-text no-client intake suppressed after initial intake completes", () => {
     const initialPromptIntakeItemIds = new Set<string>();
     const initial = applyNotificationStateForTest(
@@ -615,7 +645,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     let settled = false;
 
     const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 500,
+      turnCompletionIdleTimeoutMs: 5,
       turnTerminalIdleTimeoutMs: 500,
     }).finally(() => {
       settled = true;
@@ -694,6 +724,13 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await harness.waitForMethod("turn/steer");
     await harness.notify(
       itemNotification("item/started", {
+        id: "user-message-steer",
+        type: "userMessage",
+        content: [{ type: "text", text: " run status " }],
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
         id: "user-message-steer",
         type: "userMessage",
         content: [{ type: "text", text: " run status " }],

@@ -102,6 +102,33 @@ function isCompletionBlockingItem(item: CodexThreadItem): boolean {
   }
 }
 
+/** Returns true for app-server user message lifecycle notifications. */
+export function isUserMessageNotification(notification: CodexServerNotification): boolean {
+  if (
+    notification.method !== "item/started" &&
+    notification.method !== "item/completed" &&
+    notification.method !== "rawResponseItem/completed"
+  ) {
+    return false;
+  }
+  const item = readNotificationItem(notification);
+  if (!item) {
+    return false;
+  }
+  if (
+    notification.method === "rawResponseItem/completed" &&
+    item.role === "user" &&
+    isCodexTurnAbortMarkerText(extractRawResponseItemText(item))
+  ) {
+    return false;
+  }
+  return (
+    item.type === "UserMessage" ||
+    item.type === "userMessage" ||
+    (item.type === "message" && item.role === "user")
+  );
+}
+
 function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params)) {
     return false;
@@ -155,29 +182,8 @@ export function isUserMessageIntakeNotification(
     sameTurnSteeringAccepted?: boolean;
   } = {},
 ): boolean {
-  if (
-    notification.method !== "item/started" &&
-    notification.method !== "item/completed" &&
-    notification.method !== "rawResponseItem/completed"
-  ) {
-    return false;
-  }
   const item = readNotificationItem(notification);
-  if (!item) {
-    return false;
-  }
-  if (
-    notification.method === "rawResponseItem/completed" &&
-    item.role === "user" &&
-    isCodexTurnAbortMarkerText(extractRawResponseItemText(item))
-  ) {
-    return false;
-  }
-  if (
-    item.type !== "UserMessage" &&
-    item.type !== "userMessage" &&
-    (item.type !== "message" || item.role !== "user")
-  ) {
+  if (!item || !isUserMessageNotification(notification)) {
     return false;
   }
   const clientId = readString(item, "clientId");
