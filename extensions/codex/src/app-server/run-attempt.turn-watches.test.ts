@@ -360,7 +360,7 @@ describe("applyCodexTurnNotificationState", () => {
     });
   });
 
-  it("keeps same-text no-client user echoes suppressed after initial intake completes", () => {
+  it("treats same-text no-client accepted steering as active turn progress", () => {
     const initialPromptIntakeItemIds = new Set<string>();
     const initial = applyNotificationStateForTest(
       itemNotification("item/completed", {
@@ -383,7 +383,10 @@ describe("applyCodexTurnNotificationState", () => {
       },
     );
 
-    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith("notification:item/started", {
+      details: { lastNotificationMethod: "item/started" },
+      attemptProgress: true,
+    });
   });
 
   it("keeps delayed same-text no-client intake suppressed after initial intake completes", () => {
@@ -411,7 +414,7 @@ describe("applyCodexTurnNotificationState", () => {
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
-  it("keeps same-text no-client user echoes suppressed while initial intake is open", () => {
+  it("keeps same-text no-client intake suppressed while the initial item is open", () => {
     const initialPromptIntakeItemIds = new Set<string>();
     const initial = applyNotificationStateForTest(
       itemNotification("item/started", {
@@ -433,9 +436,9 @@ describe("applyCodexTurnNotificationState", () => {
         sameTurnSteeringAccepted: true,
       },
     );
-    const steering = applyNotificationStateForTest(
+    const duplicateInitial = applyNotificationStateForTest(
       itemNotification("item/started", {
-        id: "user-message-steer",
+        id: "user-message-initial",
         type: "userMessage",
         content: [{ type: "text", text: "run status" }],
       }),
@@ -448,7 +451,7 @@ describe("applyCodexTurnNotificationState", () => {
 
     expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
     expect(initialCompletion.turnWatches.touchActivity).not.toHaveBeenCalled();
-    expect(steering.turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(duplicateInitial.turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
   it("keeps delayed no-client initial intake suppressed after steering is accepted", () => {
@@ -464,7 +467,7 @@ describe("applyCodexTurnNotificationState", () => {
     expect(turnWatches.touchActivity).not.toHaveBeenCalled();
   });
 
-  it("keeps raw same-text no-client user echoes suppressed after steering is accepted", () => {
+  it("treats raw same-text no-client accepted steering as active turn progress", () => {
     const initial = applyNotificationStateForTest({
       method: "rawResponseItem/completed",
       params: {
@@ -499,10 +502,22 @@ describe("applyCodexTurnNotificationState", () => {
     );
 
     expect(initial.turnWatches.touchActivity).not.toHaveBeenCalled();
-    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
+      "notification:rawResponseItem/completed",
+      {
+        details: {
+          lastNotificationMethod: "rawResponseItem/completed",
+          lastNotificationItemId: "raw-user-message-steer",
+          lastNotificationItemType: "message",
+          lastNotificationItemRole: "user",
+          lastAssistantTextPreview: undefined,
+        },
+        attemptProgress: true,
+      },
+    );
   });
 
-  it("keeps whitespace-varied same-text no-client user echoes suppressed after steering is accepted", () => {
+  it("treats whitespace-varied same-text no-client accepted steering as active turn progress", () => {
     const initial = applyNotificationStateForTest({
       method: "rawResponseItem/completed",
       params: {
@@ -536,7 +551,19 @@ describe("applyCodexTurnNotificationState", () => {
       },
     );
 
-    expect(turnWatches.touchActivity).not.toHaveBeenCalled();
+    expect(turnWatches.touchActivity).toHaveBeenCalledWith(
+      "notification:rawResponseItem/completed",
+      {
+        details: {
+          lastNotificationMethod: "rawResponseItem/completed",
+          lastNotificationItemId: "raw-user-message-steer",
+          lastNotificationItemType: "message",
+          lastNotificationItemRole: "user",
+          lastAssistantTextPreview: undefined,
+        },
+        attemptProgress: true,
+      },
+    );
   });
 
   it("keeps raw same-text no-client no-id intake suppressed after steering is accepted", () => {

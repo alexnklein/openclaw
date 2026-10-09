@@ -194,6 +194,9 @@ export function isUserMessageIntakeNotification(
       // credited from accepted turn/steer responses, not ambiguous user echoes.
       return matchesCurrentPromptText(item, options);
     }
+    if (itemId && options.sameTurnSteeringAccepted) {
+      return false;
+    }
     return matchesCurrentPromptText(item, options);
   }
   return matchesCurrentPromptText(item, options);
