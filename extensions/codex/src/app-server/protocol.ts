@@ -342,7 +342,7 @@ export type CodexThreadItem = {
   aggregatedOutput: string | null;
   text: string;
   contentItems?: CodexDynamicToolCallOutputContentItem[] | null;
-  changes: Array<{ path: string; kind: string }>;
+  changes: Array<{ path: string; kind: string; diff?: string }>;
   [key: string]: unknown;
 };
 

@@ -1888,6 +1888,7 @@ describe("CodexAppServerEventProjector", () => {
     }).data;
     expect(toolResult.toolCallId).toBe("cmd-1");
     expect(toolResult.status).toBe("completed");
+    expect(toolResult.output).toBe("ok");
     expect(toolResult.isError).toBe(false);
     const toolResultPayload = requireRecord(toolResult.result, "tool result payload");
     expect(toolResultPayload.exitCode).toBe(0);
@@ -1956,6 +1957,35 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.toolName).toBe("bash");
     expect(toolResultContentItem.toolCallId).toBe("cmd-1");
     expect(toolResultContentItem.content).toBe("ok");
+  });
+
+  it("keeps native applied diffs for channel code previews", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "fileChange",
+          id: "patch-preview",
+          status: "completed",
+          changes: [
+            {
+              path: "src/app.py",
+              kind: { type: "update", move_path: null },
+              diff: "@@ -1 +1 @@\n-old\n+new",
+            },
+          ],
+        },
+      }),
+    );
+    const patch = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .find((event) => event.stream === "patch");
+    expect(patch?.data).toMatchObject({
+      status: "completed",
+      toolCallId: "patch-preview",
+      previews: [{ path: "src/app.py", diff: "@@ -1 +1 @@\n-old\n+new" }],
+    });
   });
 
   it("synthesizes native tool progress from turn completion snapshots", async () => {

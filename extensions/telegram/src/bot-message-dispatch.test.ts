@@ -3274,6 +3274,37 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), { text: "Done" });
   });
 
+  it("collapses a correlated file read into a code preview without changing the final", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({
+          name: "bash",
+          phase: "start",
+          toolCallId: "read-code",
+          args: { command: "sed -n '2,3p' src/app.py" },
+        });
+        await replyOptions?.onCommandOutput?.({
+          phase: "end",
+          toolCallId: "read-code",
+          output: '    print("<tag>")',
+          exitCode: 0,
+        });
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { richMessages: true, streaming: { mode: "progress" } },
+    });
+    const collapsed = JSON.stringify(answerDraftStream.finalizeToPreview.mock.calls);
+    expect(collapsed).toContain("<details>");
+    expect(collapsed).toContain("lines 2–3");
+    expect(collapsed).toContain("&lt;tag&gt;");
+  });
+
   it("does not count a start-phase message tool toward the collapse bar", async () => {
     // Red-team F4: progressSummary.noteToolCall() fired for ANY start-phase tool,
     // but the window renders only work tools (isChannelProgressDraftWorkToolName
