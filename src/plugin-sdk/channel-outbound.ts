@@ -73,6 +73,7 @@ export type { ReplyToResolution } from "../infra/outbound/reply-policy.js";
 export { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 export type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
 export { sanitizeForPlainText } from "../infra/outbound/sanitize-text.js";
+export { stripInternalRuntimeScaffolding } from "../infra/outbound/protocol-scaffolding.js";
 export { logAckFailure, logTypingFailure } from "../channels/logging.js";
 export * from "../channels/streaming.js";
 export {

@@ -1,7 +1,7 @@
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 // Telegram tests cover telegram outbound plugin behavior.
 import { describe, expect, it } from "vitest";
-import { splitTelegramHtmlChunks } from "./format.js";
+import { markdownToTelegramRichHtml, splitTelegramHtmlChunks } from "./format.js";
 import { telegramOutbound } from "./outbound-adapter.js";
 import { clearTelegramRuntime } from "./runtime.js";
 
@@ -44,6 +44,34 @@ describe("telegramPlugin outbound", () => {
     const text = "The pipeline has 3 deals.";
 
     expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe(text);
+  });
+
+  it("keeps rich details and literal code through outbound sanitization and rendering", () => {
+    const text = [
+      "<details><summary>Show detail</summary><p>Hidden body</p></details>",
+      "",
+      "`<Widget>`",
+      "",
+      "```python",
+      'print("<tag> & code stays exact")',
+      "```",
+    ].join("\n");
+    const sanitized = telegramOutbound.sanitizeText!({ text, payload: { text } });
+    const chunks = telegramOutbound.chunker!(sanitized, 4000);
+    const html = chunks.map((chunk) => markdownToTelegramRichHtml(chunk)).join("");
+
+    expect(html).toContain("<details><summary>Show detail</summary><p>Hidden body</p></details>");
+    expect(html).toContain("<code>&lt;Widget&gt;</code>");
+    expect(html).toContain('print("&lt;tag&gt; &amp; code stays exact")');
+  });
+
+  it("removes internal runtime blocks without flattening rich text", () => {
+    const text =
+      "<system-reminder>private runtime data</system-reminder>\n<details><summary>More</summary>Body</details>";
+    const sanitized = telegramOutbound.sanitizeText!({ text, payload: { text } });
+
+    expect(sanitized.trim()).toBe("<details><summary>More</summary>Body</details>");
+    expect(sanitized).not.toContain("private runtime data");
   });
 
   it("preserves explicit HTML parse mode before chunking", () => {
