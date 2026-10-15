@@ -59,6 +59,7 @@ import {
 } from "./agent-runner-cli-dispatch.js";
 import {
   buildCommandOutputFromToolResultEvent,
+  readPatchCodePreviews,
   buildPreflightCompactionFailureText,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
   resolveSessionRuntimeOverrideForProvider,
@@ -269,6 +270,8 @@ async function forwardFollowupProgressEvent(params: {
       modified: filterStringArray(evt.data.modified),
       deleted: filterStringArray(evt.data.deleted),
       summary: readStringValue(evt.data.summary),
+      status: readStringValue(evt.data.status),
+      previews: readPatchCodePreviews(evt.data.previews),
     });
   }
 

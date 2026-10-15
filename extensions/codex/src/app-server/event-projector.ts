@@ -1378,10 +1378,28 @@ export class CodexAppServerEventProjector {
               status,
               isError: isNonSuccessItemStatus(status),
               ...itemToolResult(item),
+              ...(item.type === "commandExecution"
+                ? sanitizeCodexAgentEventRecord({ output: item.aggregatedOutput })
+                : {}),
             }
           : {}),
       },
     });
+    if (params.phase === "result" && item.type === "fileChange") {
+      this.emitAgentEvent({
+        stream: "patch",
+        data: sanitizeCodexAgentEventRecord({
+          phase: "end",
+          itemId: item.id,
+          toolCallId: item.id,
+          name: "apply_patch",
+          status,
+          previews: Array.isArray(item.changes)
+            ? item.changes.slice(0, 32).map((change) => ({ path: change.path, diff: change.diff }))
+            : [],
+        }),
+      });
+    }
     if (params.phase === "result") {
       this.emitAfterToolCallObservation(item);
       await this.options.onNativeToolResultRecorded?.();

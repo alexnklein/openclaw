@@ -151,6 +151,7 @@ import {
   shouldSupersedeTelegramReplyFence,
   supersedeTelegramReplyFence,
 } from "./telegram-reply-fence.js";
+import { createTelegramToolCodePreviewTracker } from "./tool-code-preview.js";
 import { clipTelegramProgressText } from "./truncate.js";
 
 export { resetTelegramReplyFenceForTests };
@@ -1077,6 +1078,7 @@ export const dispatchTelegramMessage = async ({
   // Counters feed a one-line digest posted when the progress window collapses.
   const progressSummaryStartedAt = Date.now();
   const progressSummary = createTelegramProgressSummaryTracker();
+  const toolCodePreviews = createTelegramToolCodePreviewTracker();
   let progressSummaryDelivered = false;
   const progressDraft = createChannelProgressDraftCompositor({
     entry: telegramCfg,
@@ -1793,41 +1795,7 @@ export const dispatchTelegramMessage = async ({
     };
     sendDurableFailureFallback = async (payload, options) =>
       await sendPayload(payload, { durable: true, silent: options?.silent });
-    terminalizeTimedOutDispatch = async (event) => {
-      if (event.reason !== "handler-timeout" || timeoutTerminalized || isDispatchSuperseded()) {
-        return;
-      }
-      timeoutTerminalized = true;
-      for (const lane of [answerLane, reasoningLane]) {
-        const stream = lane.stream;
-        if (!stream || lane.finalized) {
-          continue;
-        }
-        const hasVisiblePreview =
-          lane.hasStreamedMessage ||
-          lane.lastPartialText.trim().length > 0 ||
-          typeof stream.messageId() === "number";
-        if (!hasVisiblePreview) {
-          continue;
-        }
-        await stream.stop();
-        if (typeof stream.messageId() === "number" || stream.sendMayHaveLanded?.()) {
-          lane.finalized = true;
-          lane.liveOutput.markAbortedResumable("handler-timeout");
-          deliveryState.markDelivered();
-        }
-      }
-      const delivered = await sendPayload(
-        {
-          text: "Response interrupted while processing. Ask me to continue from the visible preview.",
-          isError: true,
-        },
-        { durable: true, mirrorTranscript: false, silent: false },
-      );
-      if (delivered) {
-        finalAnswerDelivered = true;
-      }
-    };
+
     const emitPreviewFinalizedHook = async (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
         return;
@@ -2012,7 +1980,8 @@ export const dispatchTelegramMessage = async ({
         progressSummary.counts(),
         Date.now() - progressSummaryStartedAt,
       );
-      return line || undefined;
+      const code = toolCodePreviews.html();
+      return line ? (code ? line.split("\n\n")[0] + "\n\n" + code : line) : undefined;
     };
     // The collapse summary bar is cosmetic and always reaches the user AFTER the
     // real final answer (edited in place, or posted below it). A flood-wait /
@@ -2742,6 +2711,8 @@ export const dispatchTelegramMessage = async ({
                         isChannelProgressDraftWorkToolName(toolName);
                       if (windowRendersTool) {
                         progressSummary.noteToolCall();
+                        if (!isRoomEvent && telegramCfg.richMessages === true)
+                          toolCodePreviews.start(payload);
                       } else {
                         progressSummary.closeReasoningBurst();
                         progressSummary.closeCommentaryBurst();
@@ -2768,6 +2739,7 @@ export const dispatchTelegramMessage = async ({
                     await progressPromise;
                   },
                   onItemEvent: async (payload) => {
+                    // Structured patch previews arrive through onPatchSummary.
                     if (payload.kind === "preamble") {
                       if (verboseProgressActive()) {
                         // Durable verbose lane owns commentary; not counted toward
@@ -2844,6 +2816,7 @@ export const dispatchTelegramMessage = async ({
                     }
                   },
                   onCommandOutput: async (payload) => {
+                    toolCodePreviews.command(payload);
                     if (payload.phase !== "end") {
                       return;
                     }
@@ -2861,6 +2834,13 @@ export const dispatchTelegramMessage = async ({
                     );
                   },
                   onPatchSummary: async (payload) => {
+                    if (
+                      !isRoomEvent &&
+                      telegramCfg.richMessages === true &&
+                      canPushStreamToolProgress() &&
+                      streamToolProgressEnabled
+                    )
+                      toolCodePreviews.patch(payload);
                     if (payload.phase !== "end") {
                       return;
                     }

@@ -2900,6 +2900,8 @@ async function runAgentTurnWithFallbackInternal(
                                 )
                               : undefined,
                             summary: readStringValue(evt.data.summary),
+                            status: readStringValue(evt.data.status),
+                            previews: readPatchCodePreviews(evt.data.previews),
                           });
                         }
                         if (evt.stream === "compaction") {
@@ -3560,4 +3562,20 @@ export async function runAgentTurnWithFallback(
   } finally {
     commitTerminalOutcome();
   }
+}
+
+export function readPatchCodePreviews(
+  value: unknown,
+): Array<{ path: string; diff: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.slice(0, 32).flatMap((entry) => {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      typeof entry.path !== "string" ||
+      typeof entry.diff !== "string"
+    )
+      return [];
+    return [{ path: entry.path.slice(0, 1024), diff: entry.diff.slice(0, 10000) }];
+  });
 }

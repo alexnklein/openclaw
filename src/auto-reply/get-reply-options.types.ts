@@ -215,6 +215,8 @@ export type GetReplyOptions = {
     modified?: string[];
     deleted?: string[];
     summary?: string;
+    status?: string;
+    previews?: Array<{ path: string; diff: string }>;
   }) => Promise<void> | void;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
   onCompactionStart?: () => Promise<void> | void;
