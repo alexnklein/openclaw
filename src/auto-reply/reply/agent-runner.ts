@@ -1600,7 +1600,6 @@ export async function runReplyAgent(params: {
     preflightCompactionApplied =
       (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
-    const visibleMemoryFlushErrorPayloads: ReplyPayload[] = [];
     activeSessionEntry = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
         cfg,
@@ -1619,54 +1618,15 @@ export async function runReplyAgent(params: {
         isHeartbeat,
         replyOperation,
         onVisibleErrorPayloads: (payloads) => {
-          visibleMemoryFlushErrorPayloads.push(...payloads);
+          logVerbose(
+            `memory flush produced ${payloads.length} visible maintenance error payload(s); continuing user reply`,
+          );
         },
       }),
     );
 
     if (replyOperation.result?.kind === "aborted") {
       throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
-    }
-
-    if (visibleMemoryFlushErrorPayloads.length > 0) {
-      const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-      const payloadResult = await buildReplyPayloads({
-        config: cfg,
-        payloads: visibleMemoryFlushErrorPayloads,
-        isHeartbeat,
-        didLogHeartbeatStrip: false,
-        silentExpected: true,
-        blockStreamingEnabled,
-        blockReplyPipeline,
-        replyToMode,
-        replyToChannel,
-        currentMessageId,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        messageProvider: followupRun.run.messageProvider,
-        originatingChannel: sessionCtx.OriginatingChannel,
-        originatingChatType: sessionCtx.ChatType,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: sessionCtx.OriginatingTo,
-          to: sessionCtx.To,
-        }),
-        originatingThreadId: replyRouteThreadId,
-        accountId: sessionCtx.AccountId,
-        normalizeMediaPaths: replyMediaContext.normalizePayload,
-      });
-      const replyPayloads = payloadResult.replyPayloads.map((payload) =>
-        markReplyPayloadForSourceSuppressionDelivery(payload),
-      );
-      if (replyPayloads.length > 0) {
-        replyOperation.freezeAbort();
-        replyOperation.fail(
-          "run_failed",
-          new Error("memory flush produced visible error payloads"),
-        );
-        await signalTypingIfNeeded(replyPayloads, typingSignals);
-        return returnWithQueuedFollowupDrain(
-          replyPayloads.length === 1 ? replyPayloads[0] : replyPayloads,
-        );
-      }
     }
 
     runFollowupTurn = createFollowupRunner({

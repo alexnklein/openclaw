@@ -305,6 +305,35 @@ describe("runReplyAgent runtime config", () => {
     });
   });
 
+  it("continues the main reply when memory flush reports visible maintenance errors", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const onBlockReply = vi.fn();
+    replyParams.opts = { sourceReplyDeliveryMode: "message_tool_only", onBlockReply };
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runMemoryFlushIfNeededMock.mockImplementation(
+      async (params: {
+        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
+      }) => {
+        params.onVisibleErrorPayloads?.([
+          {
+            text: "⚠️ 🛠️ Exec: rg -n pattern memory/2026-10-19.md failed (exit 1)",
+            isError: true,
+          },
+        ]);
+        return undefined;
+      },
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    expect(result).toEqual({ text: "main reply" });
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
   it("does not start the main turn after cancellation during memory flush", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: false,
