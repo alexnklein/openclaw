@@ -240,6 +240,17 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       totalActive: queueSize + pendingReplies + embeddedRuns + activeTasks,
     };
   };
+  // Background task runs (cron, subagent, ACP, CLI) run outside the channel
+  // provider and survive a channel restart, so only reply-path work holds a
+  // channel reload. Full gateway restarts still wait for them.
+  const getChannelReloadActiveCounts = () => {
+    const counts = getActiveCounts();
+    return {
+      ...counts,
+      activeTasks: 0,
+      totalActive: counts.totalActive - counts.activeTasks,
+    };
+  };
   const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
     const details = [];
     if (counts.queueSize > 0) {
@@ -304,7 +315,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   ): Promise<boolean> => {
     // Returns true when the wait was cancelled (in-process restart supersedes),
     // false when active work drained or timed out and channel reload may proceed.
-    const initial = getActiveCounts();
+    const initial = getChannelReloadActiveCounts();
     if (initial.totalActive <= 0) {
       return false;
     }
@@ -331,7 +342,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
         return true;
       }
-      const current = getActiveCounts();
+      const current = getChannelReloadActiveCounts();
       if (current.totalActive <= 0) {
         return false;
       }
