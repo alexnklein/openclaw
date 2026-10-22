@@ -1874,11 +1874,7 @@ describe("deferred channel reload abort generation", () => {
     };
     const { applyHotReload } = createTestHandlers(logChannels, channels);
 
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-blocking-reload",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
 
     try {
@@ -1895,7 +1891,7 @@ describe("deferred channel reload abort generation", () => {
       );
     } finally {
       vi.useRealTimers();
-      hoisted.activeTaskBlockers.length = 0;
+      hoisted.activeEmbeddedRunCount.value = 0;
     }
   });
 
@@ -1913,11 +1909,7 @@ describe("deferred channel reload abort generation", () => {
     // Create gen 2 — should not carry over the abort from gen 1
     const h2 = createTestHandlers(logChannels, channels);
 
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-blocking-reload-g2",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
 
     try {
@@ -1931,7 +1923,7 @@ describe("deferred channel reload abort generation", () => {
       );
 
       // Drain active work → should proceed to stop/start channels normally
-      hoisted.activeTaskBlockers.length = 0;
+      hoisted.activeEmbeddedRunCount.value = 0;
       await vi.advanceTimersByTimeAsync(500); // wake up, see active=0, drain complete
       await expect(reloadPromise).resolves.toBeUndefined();
 
@@ -1939,6 +1931,33 @@ describe("deferred channel reload abort generation", () => {
       expect(channels.start).toHaveBeenCalledWith("whatsapp");
     } finally {
       vi.useRealTimers();
+      hoisted.activeEmbeddedRunCount.value = 0;
+    }
+  });
+
+  it("does not hold a channel reload for background task runs", async () => {
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const channels = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    const { applyHotReload } = createTestHandlers(logChannels, channels);
+
+    hoisted.activeTaskBlockers.push({
+      taskId: "task-cron-silent",
+      status: "running",
+      runtime: "cron",
+    });
+
+    try {
+      // deferralTimeoutMs 0 waits forever, so any task-based hold would hang here.
+      await applyHotReload(abortChannelReloadPlan, {
+        gateway: { reload: { deferralTimeoutMs: 0 } },
+      });
+
+      expect(channels.stop).toHaveBeenCalledWith("whatsapp", undefined, { manual: false });
+      expect(channels.start).toHaveBeenCalledWith("whatsapp");
+    } finally {
       hoisted.activeTaskBlockers.length = 0;
     }
   });
@@ -2010,11 +2029,7 @@ describe("deferred channel reload abort generation", () => {
       noopPaths: [],
     };
 
-    hoisted.activeTaskBlockers.push({
-      taskId: "task-blocking-reload",
-      status: "running",
-      runtime: "subagent",
-    });
+    hoisted.activeEmbeddedRunCount.value = 1;
     vi.useFakeTimers();
 
     try {
@@ -2039,7 +2054,7 @@ describe("deferred channel reload abort generation", () => {
       expect(channels.stop).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
-      hoisted.activeTaskBlockers.length = 0;
+      hoisted.activeEmbeddedRunCount.value = 0;
     }
   });
 });
