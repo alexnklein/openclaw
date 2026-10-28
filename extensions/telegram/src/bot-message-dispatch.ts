@@ -153,6 +153,7 @@ import {
   supersedeTelegramReplyFence,
   type TelegramReplyFenceTerminalEvent,
 } from "./telegram-reply-fence.js";
+import { renderProgressFileLinks, resolveProgressFileLinkConfig } from "./progress-file-links.js";
 import { clipTelegramProgressText } from "./truncate.js";
 
 export { resetTelegramReplyFenceForTests };
@@ -460,13 +461,25 @@ function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): s
   return parts.join(" ");
 }
 
+function progressLineSourceText(line: ChannelProgressDraftCompositorLine): string {
+  return typeof line === "string" ? line : [line.detail, line.text].filter(Boolean).join("\n");
+}
+
 function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
   richMessages: boolean,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
-  const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);
+  const fileLinks = resolveProgressFileLinkConfig();
+  const renderedLines = lines
+    .map((line) => {
+      const html = renderTelegramProgressLine(line);
+      // Files a step names open in the HIN file bridge, as in the other agents' trails.
+      const links = html ? renderProgressFileLinks(progressLineSourceText(line), fileLinks) : "";
+      return links ? `${html}<br>${links}` : html;
+    })
+    .filter(Boolean);
   const textLines = trimmed
     .split(/\r?\n/u)
     .map((line) => line.trim())
